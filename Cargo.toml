@@ -1,11 +1,25 @@
+# Nebula Tunes 项目配置文件
+#
+# 这是一个基于WebGPU的图形渲染项目，展示了一个带有动画效果的彩色三角形。
+# 项目使用wgpu进行GPU加速渲染，winit处理窗口和事件循环。
+
 [package]
-name = "nebula-tunes"
-version = "0.1.0"
-edition = "2024"
+name = "nebula-tunes"                    # 项目名称
+version = "0.1.0"                       # 项目版本
+edition = "2024"                        # Rust版本
 
 [dependencies]
+# WebGPU API绑定，用于GPU加速图形渲染
 wgpu = "26.0.1"
+
+# 跨平台窗口创建和事件处理库
 winit = "0.30.12"
+
+# 异步运行时，用于阻塞等待异步操作完成
 pollster = "0.4.0"
+
+# 环境日志记录器，用于应用程序日志输出
 env_logger = "0.11.8"
+
+# 零拷贝类型转换库，用于在CPU和GPU之间传递数据
 bytemuck = { version = "1.14", features = ["derive"] }
