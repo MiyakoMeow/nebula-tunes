@@ -142,7 +142,7 @@ impl ApplicationHandler for App {
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
-        let state = self.state.as_mut().unwrap();
+        let state = self.state.as_mut().expect("State not initialized");
         match event {
             WindowEvent::CloseRequested => {
                 println!("The close button was pressed; stopping");
