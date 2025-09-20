@@ -7,6 +7,52 @@ use winit::{
     window::{Window, WindowId},
 };
 
+const SHADER: &str = r#"
+struct TimeUniform {
+    time: f32,
+}
+
+@group(0) @binding(0)
+var<uniform> time_data: TimeUniform;
+
+struct VertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) color: vec4<f32>,
+}
+
+@vertex
+fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
+    let positions = array<vec2<f32>, 3>(
+        vec2<f32>(0.0, 0.5),
+        vec2<f32>(-0.5, -0.5),
+        vec2<f32>(0.5, -0.5)
+    );
+
+    let colors = array<vec4<f32>, 3>(
+        vec4<f32>(1.0, 0.0, 0.0, 1.0),
+        vec4<f32>(0.0, 1.0, 0.0, 1.0),
+        vec4<f32>(0.0, 0.0, 1.0, 1.0)
+    );
+
+    let pos = positions[vertex_index];
+    let color = colors[vertex_index];
+
+    // Create animation - make triangle move in a circle
+    let offset_x = sin(time_data.time) * 0.3;
+    let offset_y = cos(time_data.time) * 0.3;
+
+    var output: VertexOutput;
+    output.position = vec4<f32>(pos.x + offset_x, pos.y + offset_y, 0.0, 1.0);
+    output.color = color;
+    return output;
+}
+
+@fragment
+fn fs_main(@location(0) color: vec4<f32>) -> @location(0) vec4<f32> {
+    return color;
+}
+"#;
+
 struct State {
     window: Arc<Window>,
     device: wgpu::Device,
@@ -14,6 +60,10 @@ struct State {
     size: winit::dpi::PhysicalSize<u32>,
     surface: wgpu::Surface<'static>,
     surface_format: wgpu::TextureFormat,
+    render_pipeline: wgpu::RenderPipeline,
+    start_time: std::time::Instant,
+    uniform_buffer: wgpu::Buffer,
+    uniform_bind_group: wgpu::BindGroup,
 }
 
 impl State {
@@ -34,6 +84,90 @@ impl State {
         let cap = surface.get_capabilities(&adapter);
         let surface_format = cap.formats[0];
 
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Shader"),
+            source: wgpu::ShaderSource::Wgsl(SHADER.into()),
+        });
+
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Bind Group Layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+
+        let render_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Render Pipeline Layout"),
+                bind_group_layouts: &[&bind_group_layout],
+                push_constant_ranges: &[],
+            });
+
+        let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Render Pipeline"),
+            layout: Some(&render_pipeline_layout),
+            cache: None,
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: Some(wgpu::Face::Back),
+                unclipped_depth: false,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState {
+                count: 1,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            multiview: None,
+        });
+
+        let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Uniform Buffer"),
+            size: std::mem::size_of::<f32>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Uniform Bind Group"),
+            layout: &bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: &uniform_buffer,
+                    offset: 0,
+                    size: None,
+                }),
+            }],
+        });
+
         let state = State {
             window,
             device,
@@ -41,6 +175,10 @@ impl State {
             size,
             surface,
             surface_format,
+            render_pipeline,
+            start_time: std::time::Instant::now(),
+            uniform_buffer,
+            uniform_bind_group,
         };
 
         // Configure surface for the first time
@@ -76,6 +214,14 @@ impl State {
     }
 
     fn render(&mut self) {
+        // Calculate elapsed time for animation
+        let elapsed = self.start_time.elapsed();
+        let time = elapsed.as_secs_f32();
+
+        // Update uniform buffer with time data
+        self.queue
+            .write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[time]));
+
         // Create texture view
         let surface_texture = self
             .surface
@@ -90,17 +236,18 @@ impl State {
                 ..Default::default()
             });
 
-        // Renders a GREEN screen
+        // Create command encoder
         let mut encoder = self.device.create_command_encoder(&Default::default());
+
         // Create the renderpass which will clear the screen.
-        let renderpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        let mut renderpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: None,
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &texture_view,
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::GREEN),
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
                     store: wgpu::StoreOp::Store,
                 },
             })],
@@ -109,7 +256,12 @@ impl State {
             occlusion_query_set: None,
         });
 
-        // If you wanted to call any drawing commands, they would go here.
+        // Set the render pipeline and bind group
+        renderpass.set_pipeline(&self.render_pipeline);
+        renderpass.set_bind_group(0, &self.uniform_bind_group, &[]);
+
+        // Draw the triangle (3 vertices)
+        renderpass.draw(0..3, 0..1);
 
         // End the renderpass.
         drop(renderpass);

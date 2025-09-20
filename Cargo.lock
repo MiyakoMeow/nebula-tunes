@@ -935,6 +935,7 @@ dependencies = [
 name = "nebula-tunes"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
  "env_logger",
  "pollster",
  "wgpu",
