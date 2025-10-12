@@ -1,21 +1,8 @@
 //! # 三角形着色器
 //!
-//! 这个WGSL着色器文件定义了一个带有动画效果的彩色三角形。
-//! 顶点着色器根据时间让三角形在屏幕上做圆周运动，
+//! 这个WGSL着色器文件定义了一个彩色三角形。
+//! 顶点着色器直接使用从CPU传递的顶点位置，
 //! 片段着色器则简单地输出顶点颜色。
-
-/// 时间统一变量结构体
-///
-/// 用于向GPU着色器传递当前动画时间
-struct TimeUniform {
-    time: f32,  // 当前时间（秒）
-}
-
-/// 绑定组0，绑定点0的统一变量
-///
-/// 这个变量从CPU传递时间数据到GPU着色器
-@group(0) @binding(0)
-var<uniform> time_data: TimeUniform;
 
 /// 顶点着色器输入结构体
 ///
@@ -35,7 +22,7 @@ struct VertexOutput {
 
 /// 顶点着色器主函数
 ///
-/// 从顶点缓冲区读取顶点位置和颜色，并根据时间创建动画效果。
+/// 从顶点缓冲区读取顶点位置和颜色，直接传递给片段着色器。
 ///
 /// # 参数
 /// * `input` - 从顶点缓冲区读取的顶点属性
@@ -44,13 +31,9 @@ struct VertexOutput {
 /// 返回包含位置和颜色的VertexOutput结构体
 @vertex
 fn vs_main(input: VertexInput) -> VertexOutput {
-    // 创建动画效果 - 让三角形做圆周运动
-    let offset_x = sin(time_data.time) * 0.3;  // X轴偏移，使用正弦函数
-    let offset_y = cos(time_data.time) * 0.3;  // Y轴偏移，使用余弦函数
-
-    // 构建输出结构体
+    // 构建输出结构体，直接使用输入的位置
     var output: VertexOutput;
-    output.position = vec4<f32>(input.position.x + offset_x, input.position.y + offset_y, 0.0, 1.0);
+    output.position = vec4<f32>(input.position.x, input.position.y, 0.0, 1.0);
     output.color = input.color;
     return output;
 }

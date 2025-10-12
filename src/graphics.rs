@@ -39,12 +39,10 @@ pub struct State {
     render_pipeline: wgpu::RenderPipeline,
     /// 应用程序启动时间，用于动画计时
     start_time: std::time::Instant,
-    /// 统一缓冲区，用于向着色器传递时间数据
-    uniform_buffer: wgpu::Buffer,
-    /// 统一绑定组，用于将缓冲区绑定到着色器
-    uniform_bind_group: wgpu::BindGroup,
     /// 顶点缓冲区，存储三角形顶点数据
     vertex_buffer: wgpu::Buffer,
+    /// 基础顶点数据，用于计算动画位置
+    base_vertices: [Vertex; 3],
     /// 顶点数量
     num_vertices: u32,
 }
@@ -97,8 +95,8 @@ impl State {
             source: wgpu::ShaderSource::Wgsl(include_str!("graphics/triangle.wgsl").into()),
         });
 
-        // 定义三角形的三个顶点数据
-        let vertices = [
+        // 定义三角形的三个基础顶点数据
+        let base_vertices = [
             Vertex {
                 position: [0.0, 0.5],        // 顶部顶点
                 color: [1.0, 0.0, 0.0, 1.0], // 红色
@@ -131,27 +129,12 @@ impl State {
             ],
         };
 
-        // 创建绑定组布局，定义了着色器中uniform变量的布局
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Bind Group Layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,                             // 绑定点0
-                visibility: wgpu::ShaderStages::VERTEX, // 只在顶点着色器中可见
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform, // 统一缓冲区类型
-                    has_dynamic_offset: false,            // 不使用动态偏移
-                    min_binding_size: None,               // 不限制最小绑定大小
-                },
-                count: None,
-            }],
-        });
-
         // 创建渲染管线布局，定义了整个渲染管线的资源布局
         let render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Render Pipeline Layout"),
-                bind_group_layouts: &[&bind_group_layout], // 使用之前创建的绑定组布局
-                push_constant_ranges: &[],                 // 没有推送常量
+                bind_group_layouts: &[],   // 没有绑定组
+                push_constant_ranges: &[], // 没有推送常量
             });
 
         // 创建渲染管线，这是渲染操作的核心配置
@@ -197,33 +180,11 @@ impl State {
             multiview: None, // 禁用多视图渲染
         });
 
-        // 创建统一缓冲区，用于存储时间数据
-        let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Uniform Buffer"),
-            size: std::mem::size_of::<f32>() as u64, // 存储一个f32类型的时间值
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, // 用作uniform和允许CPU写入
-            mapped_at_creation: false, // 创建时不映射到CPU内存
-        });
-
-        // 创建统一绑定组，将缓冲区绑定到着色器的绑定点0
-        let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Uniform Bind Group"),
-            layout: &bind_group_layout, // 使用之前创建的绑定组布局
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0, // 绑定到着色器的绑定点0
-                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: &uniform_buffer, // 绑定之前创建的统一缓冲区
-                    offset: 0,               // 从缓冲区开头开始
-                    size: None,              // 绑定整个缓冲区
-                }),
-            }],
-        });
-
-        // 创建顶点缓冲区
+        // 创建顶点缓冲区，初始时使用基础顶点数据
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Vertex Buffer"),
-            contents: bytemuck::cast_slice(&vertices),
-            usage: wgpu::BufferUsages::VERTEX,
+            contents: bytemuck::cast_slice(&base_vertices),
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, // 允许CPU写入
         });
 
         // 创建State实例，包含所有初始化的WebGPU资源
@@ -236,10 +197,9 @@ impl State {
             surface_format,
             render_pipeline,
             start_time: std::time::Instant::now(), // 记录应用程序启动时间
-            uniform_buffer,
-            uniform_bind_group,
             vertex_buffer,
-            num_vertices: vertices.len() as u32,
+            base_vertices,
+            num_vertices: base_vertices.len() as u32,
         };
 
         // 首次配置渲染表面
@@ -293,8 +253,8 @@ impl State {
     /// 执行一帧渲染
     ///
     /// 这个方法执行完整的渲染循环，包括：
-    /// - 更新动画时间
-    /// - 更新统一缓冲区
+    /// - 计算动画位置
+    /// - 更新顶点缓冲区
     /// - 获取表面纹理
     /// - 创建命令编码器
     /// - 执行渲染过程
@@ -304,9 +264,26 @@ impl State {
         let elapsed = self.start_time.elapsed();
         let time = elapsed.as_secs_f32();
 
-        // 更新统一缓冲区，将时间数据写入GPU
-        self.queue
-            .write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[time]));
+        // 计算动画偏移量 - 让三角形做圆周运动
+        let offset_x = time.sin() * 0.3; // X轴偏移，使用正弦函数
+        let offset_y = time.cos() * 0.3; // Y轴偏移，使用余弦函数
+
+        // 计算动画顶点位置
+        let animated_vertices: Vec<Vertex> = self
+            .base_vertices
+            .iter()
+            .map(|vertex| Vertex {
+                position: [vertex.position[0] + offset_x, vertex.position[1] + offset_y],
+                color: vertex.color,
+            })
+            .collect();
+
+        // 更新顶点缓冲区，将动画顶点数据写入GPU
+        self.queue.write_buffer(
+            &self.vertex_buffer,
+            0,
+            bytemuck::cast_slice(&animated_vertices),
+        );
 
         // 获取当前交换链纹理用于渲染
         let surface_texture = self
@@ -341,9 +318,8 @@ impl State {
             occlusion_query_set: None,      // 无遮挡查询
         });
 
-        // 设置渲染管线和绑定组
+        // 设置渲染管线和顶点缓冲区
         renderpass.set_pipeline(&self.render_pipeline); // 使用之前创建的渲染管线
-        renderpass.set_bind_group(0, &self.uniform_bind_group, &[]); // 绑定统一缓冲区
         renderpass.set_vertex_buffer(0, self.vertex_buffer.slice(..)); // 绑定顶点缓冲区
 
         // 绘制三角形
