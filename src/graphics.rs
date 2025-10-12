@@ -5,7 +5,19 @@
 
 use std::sync::Arc;
 
+use bytemuck::{Pod, Zeroable};
+use wgpu::util::DeviceExt;
 use winit::window::Window;
+
+/// 顶点结构体
+///
+/// 定义了每个顶点的属性，包括位置和颜色信息
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Pod, Zeroable)]
+struct Vertex {
+    position: [f32; 2], // 顶点位置 (x, y)
+    color: [f32; 4],    // 顶点颜色 (r, g, b, a)
+}
 
 /// 图形渲染状态结构体
 ///
@@ -31,6 +43,10 @@ pub struct State {
     uniform_buffer: wgpu::Buffer,
     /// 统一绑定组，用于将缓冲区绑定到着色器
     uniform_bind_group: wgpu::BindGroup,
+    /// 顶点缓冲区，存储三角形顶点数据
+    vertex_buffer: wgpu::Buffer,
+    /// 顶点数量
+    num_vertices: u32,
 }
 
 impl State {
@@ -81,6 +97,40 @@ impl State {
             source: wgpu::ShaderSource::Wgsl(include_str!("graphics/triangle.wgsl").into()),
         });
 
+        // 定义三角形的三个顶点数据
+        let vertices = [
+            Vertex {
+                position: [0.0, 0.5],        // 顶部顶点
+                color: [1.0, 0.0, 0.0, 1.0], // 红色
+            },
+            Vertex {
+                position: [-0.5, -0.5],      // 左下顶点
+                color: [0.0, 1.0, 0.0, 1.0], // 绿色
+            },
+            Vertex {
+                position: [0.5, -0.5],       // 右下顶点
+                color: [0.0, 0.0, 1.0, 1.0], // 蓝色
+            },
+        ];
+
+        // 定义顶点缓冲区布局
+        let vertex_buffer_layout = wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[
+                wgpu::VertexAttribute {
+                    offset: 0,
+                    shader_location: 0,
+                    format: wgpu::VertexFormat::Float32x2, // 位置属性
+                },
+                wgpu::VertexAttribute {
+                    offset: std::mem::size_of::<[f32; 2]>() as wgpu::BufferAddress,
+                    shader_location: 1,
+                    format: wgpu::VertexFormat::Float32x4, // 颜色属性
+                },
+            ],
+        };
+
         // 创建绑定组布局，定义了着色器中uniform变量的布局
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Bind Group Layout"),
@@ -111,9 +161,9 @@ impl State {
             cache: None,
             // 顶点着色器配置
             vertex: wgpu::VertexState {
-                module: &shader,              // 使用之前创建的着色器模块
-                entry_point: Some("vs_main"), // 顶点着色器的入口函数名
-                buffers: &[],                 // 没有顶点缓冲区（使用内置顶点索引）
+                module: &shader,                  // 使用之前创建的着色器模块
+                entry_point: Some("vs_main"),     // 顶点着色器的入口函数名
+                buffers: &[vertex_buffer_layout], // 使用顶点缓冲区布局
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
             // 片段着色器配置
@@ -169,6 +219,13 @@ impl State {
             }],
         });
 
+        // 创建顶点缓冲区
+        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Vertex Buffer"),
+            contents: bytemuck::cast_slice(&vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+
         // 创建State实例，包含所有初始化的WebGPU资源
         let state = State {
             window,
@@ -181,6 +238,8 @@ impl State {
             start_time: std::time::Instant::now(), // 记录应用程序启动时间
             uniform_buffer,
             uniform_bind_group,
+            vertex_buffer,
+            num_vertices: vertices.len() as u32,
         };
 
         // 首次配置渲染表面
@@ -285,9 +344,10 @@ impl State {
         // 设置渲染管线和绑定组
         renderpass.set_pipeline(&self.render_pipeline); // 使用之前创建的渲染管线
         renderpass.set_bind_group(0, &self.uniform_bind_group, &[]); // 绑定统一缓冲区
+        renderpass.set_vertex_buffer(0, self.vertex_buffer.slice(..)); // 绑定顶点缓冲区
 
-        // 绘制三角形（3个顶点）
-        renderpass.draw(0..3, 0..1);
+        // 绘制三角形
+        renderpass.draw(0..self.num_vertices, 0..1);
 
         // 结束渲染过程
         drop(renderpass);
