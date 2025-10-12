@@ -10,7 +10,7 @@ edition = "2024"                        # Rust版本
 
 [dependencies]
 # WebGPU API绑定，用于GPU加速图形渲染
-wgpu = "26.0.1"
+wgpu = "27.0.1"
 
 # 跨平台窗口创建和事件处理库
 winit = "0.30.12"
@@ -22,4 +22,4 @@ pollster = "0.4.0"
 env_logger = "0.11.8"
 
 # 零拷贝类型转换库，用于在CPU和GPU之间传递数据
-bytemuck = { version = "1.14", features = ["derive"] }
+bytemuck = { version = "1.24.0", features = ["derive"] }
