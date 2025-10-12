@@ -6,6 +6,7 @@
 use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
+use rand::Rng;
 use wgpu::util::DeviceExt;
 use winit::window::Window;
 
@@ -17,6 +18,21 @@ use winit::window::Window;
 struct Vertex {
     position: [f32; 2], // 顶点位置 (x, y)
     color: [f32; 4],    // 顶点颜色 (r, g, b, a)
+}
+
+/// 三角形结构体
+///
+/// 定义了每个三角形的属性，包括位置、速度、颜色等
+#[derive(Clone, Debug)]
+struct Triangle {
+    /// 三角形中心位置
+    position: [f32; 2],
+    /// 下落速度 (x, y)
+    velocity: [f32; 2],
+    /// 三角形颜色
+    color: [f32; 4],
+    /// 三角形大小缩放因子
+    scale: f32,
 }
 
 /// 图形渲染状态结构体
@@ -37,14 +53,16 @@ pub struct State {
     surface_format: wgpu::TextureFormat,
     /// 渲染管线，包含了顶点着色器和片段着色器的配置
     render_pipeline: wgpu::RenderPipeline,
-    /// 应用程序启动时间，用于动画计时
-    start_time: std::time::Instant,
-    /// 顶点缓冲区，存储三角形顶点数据
+    /// 顶点缓冲区，存储所有三角形顶点数据
     vertex_buffer: wgpu::Buffer,
     /// 基础顶点数据，用于计算动画位置
     base_vertices: [Vertex; 3],
+    /// 三角形列表
+    triangles: Vec<Triangle>,
     /// 顶点数量
     num_vertices: u32,
+    /// 随机数生成器
+    rng: rand::rngs::ThreadRng,
 }
 
 impl State {
@@ -95,18 +113,18 @@ impl State {
             source: wgpu::ShaderSource::Wgsl(include_str!("graphics/triangle.wgsl").into()),
         });
 
-        // 定义三角形的三个基础顶点数据
+        // 定义三角形的三个基础顶点数据（较小的三角形）
         let base_vertices = [
             Vertex {
-                position: [0.0, 0.5],        // 顶部顶点
+                position: [0.0, 0.15],       // 顶部顶点（缩小）
                 color: [1.0, 0.0, 0.0, 1.0], // 红色
             },
             Vertex {
-                position: [-0.5, -0.5],      // 左下顶点
+                position: [-0.15, -0.15],    // 左下顶点（缩小）
                 color: [0.0, 1.0, 0.0, 1.0], // 绿色
             },
             Vertex {
-                position: [0.5, -0.5],       // 右下顶点
+                position: [0.15, -0.15],     // 右下顶点（缩小）
                 color: [0.0, 0.0, 1.0, 1.0], // 蓝色
             },
         ];
@@ -180,6 +198,31 @@ impl State {
             multiview: None, // 禁用多视图渲染
         });
 
+        // 初始化随机数生成器
+        let mut rng = rand::rng();
+
+        // 生成初始三角形列表
+        let mut triangles = Vec::new();
+        for _ in 0..10 {
+            triangles.push(Triangle {
+                position: [
+                    rng.random_range(-0.8..0.8), // 随机X位置
+                    1.0,                         // 从顶部开始
+                ],
+                velocity: [
+                    0.0,                        // 无水平速度
+                    rng.random_range(-0.02..-0.01), // 随机下落速度
+                ],
+                color: [
+                    rng.random_range(0.3..1.0), // 随机红色分量
+                    rng.random_range(0.3..1.0), // 随机绿色分量
+                    rng.random_range(0.3..1.0), // 随机蓝色分量
+                    1.0,                        // 不透明
+                ],
+                scale: 1.0, // 固定大小
+            });
+        }
+
         // 创建顶点缓冲区，初始时使用基础顶点数据
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Vertex Buffer"),
@@ -196,10 +239,11 @@ impl State {
             surface,
             surface_format,
             render_pipeline,
-            start_time: std::time::Instant::now(), // 记录应用程序启动时间
             vertex_buffer,
             base_vertices,
+            triangles,
             num_vertices: base_vertices.len() as u32,
+            rng,
         };
 
         // 首次配置渲染表面
@@ -253,38 +297,116 @@ impl State {
     /// 执行一帧渲染
     ///
     /// 这个方法执行完整的渲染循环，包括：
-    /// - 计算动画位置
+    /// - 更新三角形位置
+    /// - 生成新的三角形
     /// - 更新顶点缓冲区
     /// - 获取表面纹理
     /// - 创建命令编码器
     /// - 执行渲染过程
     /// - 提交渲染命令
     pub fn render(&mut self) {
-        // 计算动画经过的时间
-        let elapsed = self.start_time.elapsed();
-        let time = elapsed.as_secs_f32();
+        self.update_triangles();
+        let vertices = self.generate_vertices();
+        self.update_vertex_buffer(&vertices);
+        self.render_gpu();
+    }
 
-        // 计算动画偏移量 - 让三角形做圆周运动
-        let offset_x = time.sin() * 0.3; // X轴偏移，使用正弦函数
-        let offset_y = time.cos() * 0.3; // Y轴偏移，使用余弦函数
+    /// 更新三角形位置和生成新三角形
+    ///
+    /// 这个方法负责：
+    /// - 更新所有现有三角形的位置
+    /// - 处理三角形落出屏幕后的重新生成
+    /// - 偶尔生成新的三角形
+    fn update_triangles(&mut self) {
+        // 更新所有三角形位置
+        for triangle in &mut self.triangles {
+            triangle.position[0] += triangle.velocity[0];
+            triangle.position[1] += triangle.velocity[1];
 
-        // 计算动画顶点位置
-        let animated_vertices: Vec<Vertex> = self
-            .base_vertices
-            .iter()
-            .map(|vertex| Vertex {
-                position: [vertex.position[0] + offset_x, vertex.position[1] + offset_y],
-                color: vertex.color,
-            })
-            .collect();
+            // 如果三角形落出屏幕底部，重新生成在顶部
+            if triangle.position[1] < -1.2 {
+                triangle.position[0] = self.rng.random_range(-0.8..0.8);
+                triangle.position[1] = 1.0;
+                triangle.velocity[0] = 0.0; // 无水平速度
+                triangle.velocity[1] = self.rng.random_range(-0.02..-0.01);
+                triangle.color = [
+                    self.rng.random_range(0.3..1.0),
+                    self.rng.random_range(0.3..1.0),
+                    self.rng.random_range(0.3..1.0),
+                    1.0,
+                ];
+                triangle.scale = 1.0; // 固定大小
+            }
+        }
+
+        // 偶尔生成新的三角形
+        if self.rng.random_bool(0.01) && self.triangles.len() < 20 {
+            self.triangles.push(Triangle {
+                position: [self.rng.random_range(-0.8..0.8), 1.0],
+                velocity: [
+                    0.0, // 无水平速度
+                    self.rng.random_range(-0.02..-0.01),
+                ],
+                color: [
+                    self.rng.random_range(0.3..1.0),
+                    self.rng.random_range(0.3..1.0),
+                    self.rng.random_range(0.3..1.0),
+                    1.0,
+                ],
+                scale: 1.0, // 固定大小
+            });
+        }
+    }
+
+    /// 生成所有三角形的顶点数据
+    ///
+    /// # 返回
+    /// 返回包含所有三角形顶点的向量
+    fn generate_vertices(&self) -> Vec<Vertex> {
+        let mut all_vertices = Vec::new();
+        for triangle in &self.triangles {
+            for base_vertex in &self.base_vertices {
+                all_vertices.push(Vertex {
+                    position: [
+                        base_vertex.position[0] * triangle.scale + triangle.position[0],
+                        base_vertex.position[1] * triangle.scale + triangle.position[1],
+                    ],
+                    color: triangle.color,
+                });
+            }
+        }
+        all_vertices
+    }
+
+    /// 更新顶点缓冲区
+    ///
+    /// # 参数
+    /// * `vertices` - 要写入的顶点数据
+    fn update_vertex_buffer(&mut self, vertices: &[Vertex]) {
+        // 更新顶点缓冲区大小以容纳所有三角形
+        if vertices.len() as u32 != self.num_vertices {
+            self.num_vertices = vertices.len() as u32;
+            self.vertex_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Vertex Buffer"),
+                size: (vertices.len() * std::mem::size_of::<Vertex>()) as u64,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+        }
 
         // 更新顶点缓冲区，将动画顶点数据写入GPU
-        self.queue.write_buffer(
-            &self.vertex_buffer,
-            0,
-            bytemuck::cast_slice(&animated_vertices),
-        );
+        self.queue
+            .write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(vertices));
+    }
 
+    /// 执行GPU渲染
+    ///
+    /// 这个方法负责：
+    /// - 获取表面纹理
+    /// - 创建命令编码器
+    /// - 执行渲染过程
+    /// - 提交渲染命令
+    fn render_gpu(&mut self) {
         // 获取当前交换链纹理用于渲染
         let surface_texture = self
             .surface
