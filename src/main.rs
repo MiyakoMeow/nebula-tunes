@@ -1,6 +1,6 @@
 //! # Nebula Tunes 主程序
 //!
-//! 这是一个基于wgpu和winit的简单图形应用程序，展示了一个带有动画效果的彩色三角形。
+//! 这是一个基于wgpu和winit的简单图形应用程序，展示了一个带有动画效果的彩色长方形。
 #![warn(missing_docs)]
 #![warn(clippy::must_use_candidate)]
 #![warn(clippy::must_use_unit)]
