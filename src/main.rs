@@ -44,6 +44,9 @@ impl ApplicationHandler for App {
                 .unwrap(),
         );
 
+        // 禁用输入法编辑器（IME），因为它会干扰游戏
+        window.set_ime_allowed(false);
+
         // 异步创建渲染状态，使用pollster阻塞等待完成
         let state = pollster::block_on(State::new(window.clone()));
         self.state = Some(state);
