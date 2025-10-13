@@ -3,7 +3,9 @@
 //! 本模块提供了基于wgpu的图形渲染功能，用于创建和管理WebGPU渲染上下文、
 //! 渲染管线以及相关的渲染资源。
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use bytemuck::{Pod, Zeroable};
 use rand::Rng;
@@ -38,6 +40,16 @@ struct Rectangle {
 /// 图形渲染状态结构体
 ///
 /// 包含了WebGPU渲染所需的各种资源和状态信息，用于管理整个渲染管线。
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+enum TimerFlag {
+    /// 上一帧时间戳，用于计算dt
+    LastFrame,
+    /// 左方向键长按开始时间
+    HoldLeft,
+    /// 右方向键长按开始时间
+    HoldRight,
+}
+
 pub struct State {
     /// 应用程序窗口，使用Arc包装以支持多所有权
     window: Arc<Window>,
@@ -65,13 +77,17 @@ pub struct State {
     num_vertices: u32,
     /// 随机数生成器
     rng: rand::rngs::ThreadRng,
+    /// 连续移动速度（单位：每秒位移）
+    continuous_speed: f32,
+    /// 计时器管理表
+    timers: HashMap<TimerFlag, Arc<Mutex<Instant>>>,
 }
 
 impl State {
     /// 创建新的State实例
     ///
     /// 这个函数会初始化WebGPU渲染所需的所有资源，包括：
-    /// - WebGPU实例和适配器
+    /// - `WebGPU实例和适配器`
     /// - 逻辑设备和命令队列
     /// - 渲染表面和配置
     /// - 着色器模块
@@ -83,7 +99,7 @@ impl State {
     ///
     /// # 返回
     /// 返回一个完全初始化的State实例
-    pub async fn new(window: Arc<Window>) -> State {
+    pub async fn new(window: Arc<Window>) -> Self {
         // 创建WebGPU实例，这是WebGPU API的入口点
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
 
@@ -250,7 +266,10 @@ impl State {
         });
 
         // 创建State实例，包含所有初始化的WebGPU资源
-        let state = State {
+        let mut timers = HashMap::new();
+        timers.insert(TimerFlag::LastFrame, Arc::new(Mutex::new(Instant::now())));
+
+        let state = Self {
             window,
             device,
             queue,
@@ -264,6 +283,8 @@ impl State {
             rectangles,
             num_vertices: base_vertices.len() as u32,
             rng,
+            continuous_speed: 0.05,
+            timers,
         };
 
         // 首次配置渲染表面
@@ -314,6 +335,66 @@ impl State {
         self.configure_surface();
     }
 
+    /// 左右移动所有长方形
+    ///
+    /// # 参数
+    /// * `dx` - 水平位移（负值向左，正值向右）
+    pub fn move_rectangles(&mut self, dx: f32) {
+        for rectangle in &mut self.rectangles {
+            rectangle.position[0] += dx;
+
+            // 简单边界限制，避免完全移出屏幕
+            rectangle.position[0] = rectangle.position[0].clamp(-1.0, 1.0);
+        }
+    }
+
+    /// 处理按下左右键：立即移动一次并记录长按开始
+    pub fn handle_move_press(&mut self, dir: i8) {
+        self.move_rectangles(self.continuous_speed * f32::from(dir));
+        match dir {
+            -1 => {
+                self.timers
+                    .insert(TimerFlag::HoldLeft, Arc::new(Mutex::new(Instant::now())));
+            }
+            1 => {
+                self.timers
+                    .insert(TimerFlag::HoldRight, Arc::new(Mutex::new(Instant::now())));
+            }
+            _ => {}
+        }
+    }
+
+    /// 处理左右键松开：停止连续移动
+    pub fn handle_move_release(&mut self, dir: i8) {
+        match dir {
+            -1 => {
+                self.timers.remove(&TimerFlag::HoldLeft);
+            }
+            1 => {
+                self.timers.remove(&TimerFlag::HoldRight);
+            }
+            _ => {}
+        }
+    }
+
+    /// 应用长按1秒后的连续移动（按每帧dt计算）
+    fn apply_continuous_movement(&mut self, dt: f32) {
+        if let Some(t) = self.timers.get(&TimerFlag::HoldLeft) {
+            let start = *t.lock().unwrap();
+            if start.elapsed().as_secs_f32() >= 1.0 {
+                let dx = -self.continuous_speed * dt;
+                self.move_rectangles(dx);
+            }
+        }
+        if let Some(t) = self.timers.get(&TimerFlag::HoldRight) {
+            let start = *t.lock().unwrap();
+            if start.elapsed().as_secs_f32() >= 1.0 {
+                let dx = self.continuous_speed * dt;
+                self.move_rectangles(dx);
+            }
+        }
+    }
+
     /// 执行一帧渲染
     ///
     /// 这个方法执行完整的渲染循环，包括：
@@ -326,6 +407,21 @@ impl State {
     /// - 执行渲染过程
     /// - 提交渲染命令
     pub fn render(&mut self) {
+        let now = Instant::now();
+        let dt = if let Some(t) = self.timers.get(&TimerFlag::LastFrame) {
+            let mut last = t.lock().unwrap();
+            let dt = (now - *last).as_secs_f32();
+            *last = now;
+            dt
+        } else {
+            self.timers
+                .insert(TimerFlag::LastFrame, Arc::new(Mutex::new(now)));
+            0.0
+        };
+
+        // 应用长按连续移动
+        self.apply_continuous_movement(dt);
+
         self.update_rectangles();
         let vertices = self.generate_vertices();
         let indices = self.generate_indices();
@@ -391,8 +487,8 @@ impl State {
             for base_vertex in &self.base_vertices {
                 all_vertices.push(Vertex {
                     position: [
-                        base_vertex.position[0] * rectangle.scale + rectangle.position[0],
-                        base_vertex.position[1] * rectangle.scale + rectangle.position[1],
+                        base_vertex.position[0].mul_add(rectangle.scale, rectangle.position[0]),
+                        base_vertex.position[1].mul_add(rectangle.scale, rectangle.position[1]),
                     ],
                     color: rectangle.color,
                 });
@@ -428,7 +524,7 @@ impl State {
             self.num_vertices = vertices.len() as u32;
             self.vertex_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Vertex Buffer"),
-                size: (vertices.len() * std::mem::size_of::<Vertex>()) as u64,
+                size: std::mem::size_of_val(vertices) as u64,
                 usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
@@ -445,7 +541,7 @@ impl State {
     /// * `indices` - 要写入的索引数据
     fn update_index_buffer(&mut self, indices: &[u16]) {
         // 检查索引缓冲区大小是否需要更新
-        let required_size = (indices.len() * std::mem::size_of::<u16>()) as u64;
+        let required_size = std::mem::size_of_val(indices) as u64;
         if self.index_buffer.size() != required_size {
             self.index_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Index Buffer"),

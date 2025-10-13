@@ -9,6 +9,7 @@ mod graphics;
 
 use std::sync::Arc;
 
+use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::{
     application::ApplicationHandler,
     event::WindowEvent,
@@ -26,7 +27,7 @@ struct App {
     state: Option<State>,
 }
 
-/// 为App实现ApplicationHandler trait
+/// `为App实现ApplicationHandler` trait
 ///
 /// 这个trait定义了应用程序如何响应不同的事件循环事件。
 impl ApplicationHandler for App {
@@ -70,6 +71,35 @@ impl ApplicationHandler for App {
                 println!("关闭按钮被按下，正在停止应用程序");
                 event_loop.exit();
             }
+            WindowEvent::KeyboardInput { event, .. } => match &event.physical_key {
+                PhysicalKey::Code(KeyCode::ArrowLeft) | PhysicalKey::Code(KeyCode::KeyA) => {
+                    match event.state {
+                        winit::event::ElementState::Pressed => {
+                            if !event.repeat {
+                                state.handle_move_press(-1);
+                            }
+                        }
+                        winit::event::ElementState::Released => {
+                            state.handle_move_release(-1);
+                        }
+                    }
+                    state.get_window().request_redraw();
+                }
+                PhysicalKey::Code(KeyCode::ArrowRight) | PhysicalKey::Code(KeyCode::KeyD) => {
+                    match event.state {
+                        winit::event::ElementState::Pressed => {
+                            if !event.repeat {
+                                state.handle_move_press(1);
+                            }
+                        }
+                        winit::event::ElementState::Released => {
+                            state.handle_move_release(1);
+                        }
+                    }
+                    state.get_window().request_redraw();
+                }
+                _ => {}
+            },
             WindowEvent::RedrawRequested => {
                 // 执行渲染
                 state.render();
