@@ -1,26 +1,52 @@
-# Nebula Tunes 项目配置文件
-#
-# 这是一个基于WebGPU的图形渲染项目，展示了一个带有动画效果的彩色三角形。
-# 项目使用wgpu进行GPU加速渲染，winit处理窗口和事件循环。
-
 [package]
-name = "nebula-tunes"                    # 项目名称
-version = "0.1.0"                       # 项目版本
-edition = "2024"                        # Rust版本
+name = "nebula-tunes"
+version = "0.1.0"
+edition = "2024"
 
 [dependencies]
-# WebGPU API绑定，用于GPU加速图形渲染
-wgpu = "27.0.1"
+anyhow = "1"
+encoding_rs = "0.8"
+chardetng = "0.1"
+futures-lite = "2"
+async-fs = "2"
 
-# 跨平台窗口创建和事件处理库
-winit = "0.30.12"
+[dependencies.bevy]
+version = "0.17"
+features = ["flac", "mp3", "wav"]
 
-# 异步运行时，用于阻塞等待异步操作完成
-pollster = "0.4.0"
+[dependencies.async_zip]
+version = "0.0.18"
+features = [
+    "bzip2",
+    "deflate",
+    "deflate64",
+    "xz",
+    "zstd",
+]
 
-# 环境日志记录器，用于应用程序日志输出
-env_logger = "0.11.8"
+# Enable a small amount of optimization in the dev profile.
+[profile.dev]
+opt-level = 1
 
-# 零拷贝类型转换库，用于在CPU和GPU之间传递数据
-bytemuck = { version = "1.24.0", features = ["derive"] }
-rand = "0.9.2"
+# Enable a large amount of optimization in the dev profile for dependencies.
+[profile.dev.package."*"]
+opt-level = 3
+
+# Enable more optimization in the release profile at the cost of compile time.
+[profile.release]
+# Compile the entire crate as one unit.
+# Slows compile times, marginal improvements.
+codegen-units = 1
+# Do a second optimization pass over the entire program, including dependencies.
+# Slows compile times, marginal improvements.
+lto = "thin"
+
+# Optimize for size in the wasm-release profile to reduce load times and bandwidth usage on web.
+[profile.wasm-release]
+# Default to release profile values.
+inherits = "release"
+# Optimize with size in mind (also try "z", sometimes it is better).
+# Slightly slows compile times, great improvements to file size and runtime performance.
+opt-level = "s"
+# Strip all debugging information from the binary to slightly reduce file size.
+strip = "debuginfo"

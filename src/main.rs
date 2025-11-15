@@ -1,144 +1,143 @@
 //! # Nebula Tunes 主程序
-//!
-//! 这是一个基于wgpu和winit的简单图形应用程序，展示了一个带有动画效果的彩色长方形。
+
 #![warn(missing_docs)]
 #![warn(clippy::must_use_candidate)]
 #![warn(clippy::must_use_unit)]
+#![warn(clippy::redundant_clone)]
+#![warn(clippy::redundant_closure_for_method_calls)]
+#![warn(clippy::redundant_else)]
+#![warn(clippy::redundant_feature_names)]
 
-mod graphics;
+use anyhow::{Result, anyhow};
+use async_fs::{self as afs, File};
+use async_zip::base::read::seek::ZipFileReader;
+use bevy::app::AppExit;
+use bevy::prelude::*;
+use bevy::tasks::{IoTaskPool, Task, futures::check_ready};
+use chardetng::EncodingDetector;
+use futures_lite::io::BufReader;
+use futures_lite::prelude::*;
+use std::path::PathBuf;
 
-use std::sync::Arc;
-
-use winit::keyboard::{KeyCode, PhysicalKey};
-use winit::{
-    application::ApplicationHandler,
-    event::WindowEvent,
-    event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
-    window::{Window, WindowId},
-};
-
-use self::graphics::State;
-
-/// 应用程序结构体
-///
-/// 包含了应用程序的主要状态信息，使用Option包装State以支持延迟初始化。
-#[derive(Default)]
-struct App {
-    state: Option<State>,
+fn main() {
+    App::new()
+        .add_plugins(MinimalPlugins)
+        .add_systems(Startup, start_async_read)
+        .add_systems(Update, poll_task_and_exit)
+        .run();
 }
 
-/// `为App实现ApplicationHandler` trait
-///
-/// 这个trait定义了应用程序如何响应不同的事件循环事件。
-impl ApplicationHandler for App {
-    /// 当应用程序恢复时调用
-    ///
-    /// 这个方法在应用程序启动或从后台恢复时调用，用于初始化窗口和渲染状态。
-    ///
-    /// # 参数
-    /// * `event_loop` - 活动事件循环引用
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        // 创建窗口对象
-        let window = Arc::new(
-            event_loop
-                .create_window(Window::default_attributes())
-                .unwrap(),
-        );
+#[derive(Resource)]
+struct ReadTask(Task<Result<Vec<String>>>);
 
-        // 禁用输入法编辑器（IME），因为它会干扰游戏
-        window.set_ime_allowed(false);
+fn start_async_read(mut commands: Commands) {
+    let zip_path: PathBuf = PathBuf::from(std::env::args_os().nth(1).expect("missing zip path"));
 
-        // 异步创建渲染状态，使用pollster阻塞等待完成
-        let state = pollster::block_on(State::new(window.clone()));
-        self.state = Some(state);
+    let task = IoTaskPool::get().spawn(read_lines(zip_path));
+    commands.insert_resource(ReadTask(task));
+}
 
-        // 请求重绘以开始渲染循环
-        window.request_redraw();
-    }
-
-    /// 处理窗口事件
-    ///
-    /// 这个方法处理所有窗口相关的事件，包括关闭、调整大小和重绘请求。
-    ///
-    /// # 参数
-    /// * `event_loop` - 活动事件循环引用
-    /// * `_id` - 窗口ID（未使用）
-    /// * `event` - 窗口事件
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
-        let state = self.state.as_mut().expect("状态未初始化");
-        match event {
-            WindowEvent::CloseRequested => {
-                println!("关闭按钮被按下，正在停止应用程序");
-                event_loop.exit();
+fn poll_task_and_exit(task_res: Option<ResMut<ReadTask>>, mut exit: MessageWriter<AppExit>) {
+    if let Some(mut task) = task_res
+        && let Some(result) = check_ready(&mut task.0)
+    {
+        match result {
+            Ok(lines) => {
+                lines.into_iter().for_each(|line| println!("{}", line));
+                exit.write(AppExit::Success);
             }
-            WindowEvent::KeyboardInput { event, .. } => match &event.physical_key {
-                PhysicalKey::Code(KeyCode::ArrowLeft) | PhysicalKey::Code(KeyCode::KeyA) => {
-                    match event.state {
-                        winit::event::ElementState::Pressed => {
-                            if !event.repeat {
-                                state.handle_move_press(-1);
-                            }
-                        }
-                        winit::event::ElementState::Released => {
-                            state.handle_move_release(-1);
-                        }
-                    }
-                    state.get_window().request_redraw();
-                }
-                PhysicalKey::Code(KeyCode::ArrowRight) | PhysicalKey::Code(KeyCode::KeyD) => {
-                    match event.state {
-                        winit::event::ElementState::Pressed => {
-                            if !event.repeat {
-                                state.handle_move_press(1);
-                            }
-                        }
-                        winit::event::ElementState::Released => {
-                            state.handle_move_release(1);
-                        }
-                    }
-                    state.get_window().request_redraw();
-                }
-                _ => {}
-            },
-            WindowEvent::RedrawRequested => {
-                // 执行渲染
-                state.render();
-                // 发出新的重绘请求事件，创建连续的渲染循环
-                state.get_window().request_redraw();
+            Err(e) => {
+                eprintln!("{}", e);
+                exit.write(AppExit::Success);
             }
-            WindowEvent::Resized(size) => {
-                // 重新配置表面尺寸。我们不在此处重新渲染，
-                // 因为这个事件总是会跟随一个重绘请求。
-                state.resize(size);
-            }
-            _ => (), // 忽略其他事件
         }
     }
 }
 
-/// 应用程序入口点
-///
-/// 这个函数设置并启动整个应用程序的事件循环。
-fn main() {
-    // wgpu使用`log`进行所有日志记录，因此我们使用`env_logger`crate初始化日志器。
-    //
-    // 要更改日志级别，请设置`RUST_LOG`环境变量。更多信息请参阅`env_logger`文档。
-    env_logger::init();
+async fn read_lines_from_archive(zip_path: PathBuf) -> Result<Vec<String>> {
+    let file = File::open(&zip_path).await?;
+    let ext = zip_path
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+    let mut out: Vec<String> = Vec::new();
+    match ext.as_str() {
+        "zip" => {
+            let reader = BufReader::new(file);
+            let mut zip = ZipFileReader::new(reader).await?;
+            let len = zip.file().entries().len();
+            for index in 0..len {
+                let (name, is_bms) = {
+                    let entry = zip.reader_with_entry(index).await?;
+                    let name_raw = entry.entry().filename().as_bytes();
+                    let mut det = EncodingDetector::new();
+                    det.feed(name_raw, true);
+                    let enc = det.guess(None, true);
+                    let (name_cow, _, _) = enc.decode(name_raw);
+                    let name = name_cow.into_owned();
+                    let is_bms = name
+                        .rsplit('.')
+                        .next()
+                        .map(|ext| ext.eq_ignore_ascii_case("bms"))
+                        .unwrap_or(false);
+                    (name, is_bms)
+                };
+                if !is_bms {
+                    continue;
+                }
+                let mut reader = zip.reader_with_entry(index).await?;
+                let mut bytes = Vec::new();
+                reader.read_to_end_checked(&mut bytes).await?;
+                out.push(zip_path.to_string_lossy().into_owned());
+                out.push(name);
+                let mut det = EncodingDetector::new();
+                det.feed(&bytes, true);
+                let enc = det.guess(None, true);
+                let (cow, _, _) = enc.decode(&bytes);
+                let s = cow.into_owned();
+                for line in s.lines().take(5) {
+                    out.push(line.to_string());
+                }
+            }
+            Ok(out)
+        }
+        _ => Err(anyhow!("unsupported archive: {}", ext)),
+    }
+}
 
-    // 创建事件循环
-    let event_loop = EventLoop::new().unwrap();
-
-    // 当当前循环迭代完成时，无论是否有新事件可用，都立即开始新的迭代。
-    // 对于希望以最快速度渲染的应用程序（如游戏）是首选。
-    event_loop.set_control_flow(ControlFlow::Poll);
-
-    // 当当前循环迭代完成时，挂起线程直到另一个事件到达。
-    // 有助于在没有事情发生时保持CPU利用率低，这在应用程序可能在后台空闲时是首选。
-    // event_loop.set_control_flow(ControlFlow::Wait);
-
-    // 创建应用程序实例
-    let mut app = App::default();
-
-    // 运行应用程序事件循环
-    event_loop.run_app(&mut app).unwrap();
+async fn read_lines(path: PathBuf) -> Result<Vec<String>> {
+    if afs::metadata(&path).await?.is_dir() {
+        let mut dir = afs::read_dir(&path).await?;
+        let mut archives: Vec<PathBuf> = Vec::new();
+        while let Some(entry_res) = dir.next().await {
+            let entry = entry_res?;
+            let ft = entry.file_type().await?;
+            if ft.is_file() {
+                let p = entry.path();
+                let is_zip = p
+                    .extension()
+                    .and_then(|s| s.to_str())
+                    .map(|s| s.eq_ignore_ascii_case("zip"))
+                    .unwrap_or(false);
+                if is_zip {
+                    archives.push(p);
+                }
+            }
+        }
+        archives.sort_by_key(|p| p.file_name().map(std::ffi::OsStr::to_os_string));
+        let pool = IoTaskPool::get();
+        let tasks: Vec<Task<Result<Vec<String>>>> = archives
+            .into_iter()
+            .map(|p| pool.spawn(read_lines_from_archive(p)))
+            .collect();
+        let mut out: Vec<String> = Vec::new();
+        for task in tasks {
+            let v = task.await?;
+            out.extend(v);
+        }
+        Ok(out)
+    } else {
+        read_lines_from_archive(path).await
+    }
 }
