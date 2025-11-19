@@ -16,8 +16,10 @@ use bevy::prelude::*;
 use bevy::tasks::{IoTaskPool, Task, futures::check_ready};
 use chardetng::EncodingDetector;
 use futures_lite::io::BufReader;
-use futures_lite::prelude::*;
+use futures_lite::{StreamExt, stream};
 use std::path::PathBuf;
+
+const MAX_CONCURRENCY: usize = 8;
 
 fn main() {
     App::new()
@@ -109,34 +111,64 @@ async fn read_lines_from_archive(zip_path: PathBuf) -> Result<Vec<String>> {
 async fn read_lines(path: PathBuf) -> Result<Vec<String>> {
     if afs::metadata(&path).await?.is_dir() {
         let mut dir = afs::read_dir(&path).await?;
-        let mut archives: Vec<PathBuf> = Vec::new();
-        while let Some(entry_res) = dir.next().await {
-            let entry = entry_res?;
-            let ft = entry.file_type().await?;
-            if ft.is_file() {
+        let entries: Vec<Result<afs::DirEntry, std::io::Error>> =
+            StreamExt::collect(&mut dir).await;
+        let entries: Vec<afs::DirEntry> = entries.into_iter().collect::<Result<Vec<_>, _>>()?;
+
+        let paths: Vec<anyhow::Result<Option<PathBuf>>> = stream::iter(entries)
+            .then(|entry| async move {
+                let ft = entry.file_type().await?;
+                if !ft.is_file() {
+                    return Ok(None);
+                }
                 let p = entry.path();
                 let is_zip = p
                     .extension()
                     .and_then(|s| s.to_str())
                     .map(|s| s.eq_ignore_ascii_case("zip"))
                     .unwrap_or(false);
-                if is_zip {
-                    archives.push(p);
-                }
-            }
-        }
-        archives.sort_by_key(|p| p.file_name().map(std::ffi::OsStr::to_os_string));
-        let pool = IoTaskPool::get();
-        let tasks: Vec<Task<Result<Vec<String>>>> = archives
+                Ok(if is_zip { Some(p) } else { None })
+            })
+            .collect()
+            .await;
+
+        let archives: Vec<PathBuf> = paths
             .into_iter()
-            .map(|p| pool.spawn(read_lines_from_archive(p)))
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .flatten()
             .collect();
-        let mut out: Vec<String> = Vec::new();
-        for task in tasks {
-            let v = task.await?;
-            out.extend(v);
-        }
-        Ok(out)
+
+        let pool = IoTaskPool::get();
+        stream::iter(archives.chunks(MAX_CONCURRENCY))
+            .then(move |chunk| {
+                let tasks = chunk
+                    .iter()
+                    .cloned()
+                    .map(|p| pool.spawn(read_lines_from_archive(p)));
+                async move {
+                    stream::iter(tasks)
+                        .then(|t| t)
+                        .fold(Ok(Vec::new()), |acc, v| match (acc, v) {
+                            (Ok(mut acc), Ok(v)) => {
+                                acc.extend(v);
+                                Ok(acc)
+                            }
+                            (Err(e), _) => Err(e),
+                            (_, Err(e)) => Err(e),
+                        })
+                        .await
+                }
+            })
+            .fold(Ok(Vec::new()), |acc, chunk_res| match (acc, chunk_res) {
+                (Ok(mut acc), Ok(v)) => {
+                    acc.extend(v);
+                    Ok(acc)
+                }
+                (Err(e), _) => Err(e),
+                (_, Err(e)) => Err(e),
+            })
+            .await
     } else {
         read_lines_from_archive(path).await
     }
