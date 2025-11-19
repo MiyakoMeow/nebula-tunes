@@ -13,7 +13,7 @@ use async_fs::{self as afs, File};
 use async_zip::base::read::seek::ZipFileReader;
 use bevy::app::AppExit;
 use bevy::prelude::*;
-use bevy::tasks::{IoTaskPool, Task, futures::check_ready};
+use bevy::tasks::{AsyncComputeTaskPool, Task, futures::check_ready};
 use chardetng::EncodingDetector;
 use futures_lite::io::BufReader;
 use futures_lite::{StreamExt, stream};
@@ -35,7 +35,7 @@ struct ReadTask(Task<Result<Vec<String>>>);
 fn start_async_read(mut commands: Commands) {
     let zip_path: PathBuf = PathBuf::from(std::env::args_os().nth(1).expect("missing zip path"));
 
-    let task = IoTaskPool::get().spawn(read_lines(zip_path));
+    let task = AsyncComputeTaskPool::get().spawn(read_lines(zip_path));
     commands.insert_resource(ReadTask(task));
 }
 
@@ -139,7 +139,7 @@ async fn read_lines(path: PathBuf) -> Result<Vec<String>> {
             .flatten()
             .collect();
 
-        let pool = IoTaskPool::get();
+        let pool = AsyncComputeTaskPool::get();
         stream::iter(archives.chunks(MAX_CONCURRENCY))
             .then(move |chunk| {
                 let tasks = chunk
