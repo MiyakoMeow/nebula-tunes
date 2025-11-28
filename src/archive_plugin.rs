@@ -71,7 +71,12 @@ fn on_scan_message(
                             .and_then(|s| s.to_str())
                             .map(|s| s.eq_ignore_ascii_case("zip"))
                             .unwrap_or(false);
-                        Ok(if is_zip { Some(p) } else { None })
+                        let is_7z = p
+                            .extension()
+                            .and_then(|s| s.to_str())
+                            .map(|s| s.eq_ignore_ascii_case("7z"))
+                            .unwrap_or(false);
+                        Ok(if is_zip || is_7z { Some(p) } else { None })
                     })
                     .collect()
                     .await;
@@ -92,7 +97,7 @@ fn on_scan_message(
                     .map(str::to_ascii_lowercase)
                     .unwrap_or_default();
                 match ext.as_str() {
-                    "zip" => {
+                    "zip" | "7z" => {
                         found_writer.write(ArchiveFound(path.to_path_buf()));
                         Ok(1)
                     }
@@ -118,8 +123,22 @@ fn on_scan_message(
 fn spawn_read_tasks(mut tasks: ResMut<ReadTasks>, mut ev_found: MessageReader<ArchiveFound>) {
     let pool = AsyncComputeTaskPool::get();
     for ArchiveFound(path) in ev_found.read() {
-        let task = pool.spawn(read_lines_from_zip(path.clone()));
-        tasks.0.push((path.clone(), task));
+        let ext = path
+            .extension()
+            .and_then(|s| s.to_str())
+            .map(str::to_ascii_lowercase)
+            .unwrap_or_default();
+        match ext.as_str() {
+            "zip" => {
+                let task = pool.spawn(read_lines_from_zip(path.clone()));
+                tasks.0.push((path.clone(), task));
+            }
+            "7z" => {
+                let task = pool.spawn(read_lines_from_7z(path.clone()));
+                tasks.0.push((path.clone(), task));
+            }
+            _ => {}
+        }
     }
 }
 
@@ -206,5 +225,68 @@ async fn read_lines_from_zip(zip_path: PathBuf) -> Result<Vec<String>> {
             out.push(line.to_string());
         }
     }
+    Ok(out)
+}
+
+async fn read_lines_from_7z(archive_path: PathBuf) -> Result<Vec<String>> {
+    let mut tmp = std::env::temp_dir();
+    tmp.push(format!("nebula_tunes_{}_7z", std::process::id()));
+    afs::create_dir_all(&tmp).await?;
+
+    let src = archive_path.to_string_lossy().to_string();
+    let dst = tmp.to_string_lossy().to_string();
+
+    async_sevenz::decompress_file(&src, &dst)
+        .await
+        .map_err(|e| anyhow!("{}", e))?;
+
+    let mut out: Vec<String> = Vec::new();
+    // Walk decompressed tree and read .bms files
+    let mut stack = vec![tmp.clone()];
+    while let Some(dir_path) = stack.pop() {
+        let mut rd = match afs::read_dir(&dir_path).await {
+            Ok(d) => d,
+            Err(_) => continue,
+        };
+        let entries: Vec<Result<afs::DirEntry, std::io::Error>> = StreamExt::collect(&mut rd).await;
+        let entries: Vec<afs::DirEntry> = entries.into_iter().collect::<Result<Vec<_>, _>>()?;
+        for entry in entries {
+            let p = entry.path();
+            let ft = entry.file_type().await?;
+            if ft.is_dir() {
+                stack.push(p);
+                continue;
+            }
+            if ft.is_file() {
+                let is_bms = p
+                    .extension()
+                    .and_then(|s| s.to_str())
+                    .map(|s| s.eq_ignore_ascii_case("bms"))
+                    .unwrap_or(false);
+                if !is_bms {
+                    continue;
+                }
+                let bytes = afs::read(&p).await?;
+                let mut det = chardetng::EncodingDetector::new();
+                det.feed(&bytes, true);
+                let enc = det.guess(None, true);
+                let (cow, _, _) = enc.decode(&bytes);
+                let s = cow.into_owned();
+                if let Some(name) = p
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .map(std::string::ToString::to_string)
+                {
+                    out.push(name);
+                }
+                for line in s.lines().take(5) {
+                    out.push(line.to_string());
+                }
+            }
+        }
+    }
+
+    let _ = afs::remove_dir_all(&tmp).await;
+
     Ok(out)
 }

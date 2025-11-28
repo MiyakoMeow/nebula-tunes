@@ -9,6 +9,7 @@ encoding_rs = "0.8"
 chardetng = "0.1"
 futures-lite = "2"
 async-fs = "2"
+async-sevenz = "0.0.3"
 
 [dependencies.bevy]
 version = "0.17"
