@@ -10,34 +10,102 @@ use chardetng::EncodingDetector;
 use futures_lite::io::BufReader;
 use futures_lite::{StreamExt, stream};
 
-const MAX_CONCURRENCY: usize = 8;
+#[derive(Message)]
+pub struct ArchiveFound(pub PathBuf);
+
+#[derive(Message)]
+pub struct ArchiveReadFinished {
+    pub path: PathBuf,
+    pub lines: Vec<String>,
+}
+
+#[derive(Message)]
+pub struct ScanArchives(pub PathBuf);
+
+#[derive(Resource, Default)]
+struct ReadTasks(Vec<(PathBuf, Task<Result<Vec<String>>>)>);
 
 #[derive(Resource)]
-struct ReadTask(Task<Result<Vec<String>>>);
+struct PendingTasks(usize);
 
-pub struct ZipArchivePlugin;
+pub struct ArchivePlugin;
 
-impl Plugin for ZipArchivePlugin {
+impl Plugin for ArchivePlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, start_async_read)
-            .add_systems(Update, poll_task_and_exit);
+        app.add_message::<ArchiveFound>()
+            .add_message::<ArchiveReadFinished>()
+            .add_message::<ScanArchives>()
+            .insert_resource(ReadTasks::default())
+            .insert_resource(PendingTasks(0))
+            .add_systems(Startup, on_scan_message)
+            .add_systems(
+                Update,
+                (spawn_read_tasks, poll_read_tasks, print_and_exit_on_done),
+            );
     }
 }
 
-fn start_async_read(mut commands: Commands) {
-    let path: PathBuf = PathBuf::from(std::env::args_os().nth(1).expect("missing zip path"));
-    let task = AsyncComputeTaskPool::get().spawn(read_lines(path));
-    commands.insert_resource(ReadTask(task));
-}
-
-fn poll_task_and_exit(task_res: Option<ResMut<ReadTask>>, mut exit: MessageWriter<AppExit>) {
-    if let Some(mut task) = task_res
-        && let Some(result) = check_ready(&mut task.0)
-    {
-        match result {
-            Ok(lines) => {
-                lines.into_iter().for_each(|line| println!("{}", line));
-                exit.write(AppExit::Success);
+fn on_scan_message(
+    mut found_writer: MessageWriter<ArchiveFound>,
+    mut exit: MessageWriter<AppExit>,
+    mut pending: ResMut<PendingTasks>,
+    mut scan_reader: MessageReader<ScanArchives>,
+) {
+    for ScanArchives(path) in scan_reader.read() {
+        let res = futures_lite::future::block_on(async {
+            if afs::metadata(&path).await?.is_dir() {
+                let mut dir = afs::read_dir(&path).await?;
+                let entries: Vec<Result<afs::DirEntry, std::io::Error>> =
+                    StreamExt::collect(&mut dir).await;
+                let entries: Vec<afs::DirEntry> =
+                    entries.into_iter().collect::<Result<Vec<_>, _>>()?;
+                let paths: Vec<anyhow::Result<Option<PathBuf>>> = stream::iter(entries)
+                    .then(|entry| async move {
+                        let ft = entry.file_type().await?;
+                        if !ft.is_file() {
+                            return Ok(None);
+                        }
+                        let p = entry.path();
+                        let is_zip = p
+                            .extension()
+                            .and_then(|s| s.to_str())
+                            .map(|s| s.eq_ignore_ascii_case("zip"))
+                            .unwrap_or(false);
+                        Ok(if is_zip { Some(p) } else { None })
+                    })
+                    .collect()
+                    .await;
+                let archives: Vec<PathBuf> = paths
+                    .into_iter()
+                    .collect::<Result<Vec<_>, _>>()?
+                    .into_iter()
+                    .flatten()
+                    .collect();
+                for p in &archives {
+                    found_writer.write(ArchiveFound(p.clone()));
+                }
+                Ok(archives.len())
+            } else {
+                let ext = path
+                    .extension()
+                    .and_then(|s| s.to_str())
+                    .map(str::to_ascii_lowercase)
+                    .unwrap_or_default();
+                match ext.as_str() {
+                    "zip" => {
+                        found_writer.write(ArchiveFound(path.to_path_buf()));
+                        Ok(1)
+                    }
+                    _ => Err(anyhow!("unsupported archive: {}", ext)),
+                }
+            }
+        });
+        match res {
+            Ok(count) => {
+                pending.0 = pending.0.saturating_add(count);
+                if pending.0 == 0 {
+                    exit.write(AppExit::Success);
+                }
             }
             Err(e) => {
                 eprintln!("{}", e);
@@ -47,77 +115,56 @@ fn poll_task_and_exit(task_res: Option<ResMut<ReadTask>>, mut exit: MessageWrite
     }
 }
 
-async fn read_lines(path: PathBuf) -> Result<Vec<String>> {
-    if afs::metadata(&path).await?.is_dir() {
-        let mut dir = afs::read_dir(&path).await?;
-        let entries: Vec<Result<afs::DirEntry, std::io::Error>> =
-            StreamExt::collect(&mut dir).await;
-        let entries: Vec<afs::DirEntry> = entries.into_iter().collect::<Result<Vec<_>, _>>()?;
+fn spawn_read_tasks(mut tasks: ResMut<ReadTasks>, mut ev_found: MessageReader<ArchiveFound>) {
+    let pool = AsyncComputeTaskPool::get();
+    for ArchiveFound(path) in ev_found.read() {
+        let task = pool.spawn(read_lines_from_zip(path.clone()));
+        tasks.0.push((path.clone(), task));
+    }
+}
 
-        let paths: Vec<anyhow::Result<Option<PathBuf>>> = stream::iter(entries)
-            .then(|entry| async move {
-                let ft = entry.file_type().await?;
-                if !ft.is_file() {
-                    return Ok(None);
+fn poll_read_tasks(
+    mut tasks: ResMut<ReadTasks>,
+    mut pending: ResMut<PendingTasks>,
+    mut ev_done: MessageWriter<ArchiveReadFinished>,
+) {
+    let mut i = 0;
+    while i < tasks.0.len() {
+        let (path, task) = &mut tasks.0[i];
+        if let Some(result) = check_ready(task) {
+            match result {
+                Ok(lines) => {
+                    ev_done.write(ArchiveReadFinished {
+                        path: path.clone(),
+                        lines,
+                    });
                 }
-                let p = entry.path();
-                let is_zip = p
-                    .extension()
-                    .and_then(|s| s.to_str())
-                    .map(|s| s.eq_ignore_ascii_case("zip"))
-                    .unwrap_or(false);
-                Ok(if is_zip { Some(p) } else { None })
-            })
-            .collect()
-            .await;
-
-        let archives: Vec<PathBuf> = paths
-            .into_iter()
-            .collect::<Result<Vec<_>, _>>()?
-            .into_iter()
-            .flatten()
-            .collect();
-
-        let pool = AsyncComputeTaskPool::get();
-        stream::iter(archives.chunks(MAX_CONCURRENCY))
-            .then(move |chunk| {
-                let tasks = chunk
-                    .iter()
-                    .cloned()
-                    .map(|p| pool.spawn(read_lines_from_zip(p)));
-                async move {
-                    stream::iter(tasks)
-                        .then(|t| t)
-                        .fold(Ok(Vec::new()), |acc, v| match (acc, v) {
-                            (Ok(mut acc), Ok(v)) => {
-                                acc.extend(v);
-                                Ok(acc)
-                            }
-                            (Err(e), _) => Err(e),
-                            (_, Err(e)) => Err(e),
-                        })
-                        .await
+                Err(e) => {
+                    eprintln!("{}", e);
                 }
-            })
-            .fold(Ok(Vec::new()), |acc, chunk_res| match (acc, chunk_res) {
-                (Ok(mut acc), Ok(v)) => {
-                    acc.extend(v);
-                    Ok(acc)
-                }
-                (Err(e), _) => Err(e),
-                (_, Err(e)) => Err(e),
-            })
-            .await
-    } else {
-        let ext = path
-            .extension()
-            .and_then(|s| s.to_str())
-            .map(str::to_ascii_lowercase)
-            .unwrap_or_default();
-        match ext.as_str() {
-            "zip" => read_lines_from_zip(path).await,
-            _ => Err(anyhow!("unsupported archive: {}", ext)),
+            }
+            pending.0 = pending.0.saturating_sub(1);
+            let (_p, finished_task) = tasks.0.swap_remove(i);
+            drop(finished_task);
+        } else {
+            i += 1;
         }
+    }
+}
+
+fn print_and_exit_on_done(
+    mut ev_done: MessageReader<ArchiveReadFinished>,
+    pending: Res<PendingTasks>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    for ev in ev_done.read() {
+        println!("{}", ev.path.to_string_lossy());
+        for line in &ev.lines {
+            println!("{}", line);
+        }
+    }
+    if pending.0 == 0 {
+        exit.write(AppExit::Success);
     }
 }
 
@@ -149,7 +196,6 @@ async fn read_lines_from_zip(zip_path: PathBuf) -> Result<Vec<String>> {
         let mut reader = zip.reader_with_entry(index).await?;
         let mut bytes = Vec::new();
         reader.read_to_end_checked(&mut bytes).await?;
-        out.push(zip_path.to_string_lossy().into_owned());
         out.push(name);
         let mut det = EncodingDetector::new();
         det.feed(&bytes, true);

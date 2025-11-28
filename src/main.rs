@@ -8,14 +8,25 @@
 #![warn(clippy::redundant_else)]
 #![warn(clippy::redundant_feature_names)]
 
+use std::path::PathBuf;
+
 use bevy::prelude::*;
 
 mod archive_plugin;
-use archive_plugin::ZipArchivePlugin;
+use archive_plugin::{ArchivePlugin, ScanArchives};
 
 fn main() {
     App::new()
         .add_plugins(MinimalPlugins)
-        .add_plugins(ZipArchivePlugin)
+        .add_plugins(ArchivePlugin)
+        .add_systems(Startup, send_scan_message)
         .run();
+}
+
+fn send_scan_message(mut writer: MessageWriter<ScanArchives>) {
+    let Some(path_env) = std::env::args_os().nth(1) else {
+        return;
+    };
+    let path: PathBuf = PathBuf::from(path_env);
+    writer.write(ScanArchives(path));
 }
