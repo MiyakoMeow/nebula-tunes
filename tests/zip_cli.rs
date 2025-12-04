@@ -28,7 +28,11 @@ fn prints_first_five_lines_from_bms_in_zip() {
     block_on(afs::write(&path, &bytes)).unwrap();
 
     let bin = env!("CARGO_BIN_EXE_nebula-tunes");
-    let out = Command::new(bin).arg(&path).output().unwrap();
+    let out = Command::new(bin)
+        .arg("--test-archive-path")
+        .arg(&path)
+        .output()
+        .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
     let expected = format!(
         "{}\n{}\nA\nB\nC\nD\nE\n",

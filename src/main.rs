@@ -11,6 +11,7 @@
 use std::path::PathBuf;
 
 use bevy::prelude::*;
+use clap::Parser;
 
 mod archive_plugin;
 use archive_plugin::{ArchivePlugin, ScanArchives};
@@ -19,14 +20,19 @@ fn main() {
     App::new()
         .add_plugins(MinimalPlugins)
         .add_plugins(ArchivePlugin)
-        .add_systems(Startup, send_scan_message)
+        .add_systems(Startup, parse_args)
         .run();
 }
 
-fn send_scan_message(mut writer: MessageWriter<ScanArchives>) {
-    let Some(path_env) = std::env::args_os().nth(1) else {
-        return;
-    };
-    let path: PathBuf = PathBuf::from(path_env);
-    writer.write(ScanArchives(path));
+#[derive(Parser)]
+struct Args {
+    #[arg(long)]
+    test_archive_path: Option<PathBuf>,
+}
+
+fn parse_args(mut scan_archives_writer: MessageWriter<ScanArchives>) {
+    let args = Args::parse();
+    if let Some(path) = args.test_archive_path {
+        scan_archives_writer.write(ScanArchives(path));
+    }
 }
