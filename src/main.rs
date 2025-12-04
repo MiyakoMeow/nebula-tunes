@@ -13,26 +13,29 @@ use std::path::PathBuf;
 use bevy::prelude::*;
 use clap::Parser;
 
-mod archive_plugin;
-use archive_plugin::{ArchivePlugin, ScanArchives};
+mod test_archive_plugin;
+use test_archive_plugin::TestArchivePlugin;
 
 fn main() {
+    let args = ExecArgs::parse();
+    // 测试模式下使用 MinimalPlugins，否则使用 DefaultPlugins
+    if args.test_archive_path.is_some() {
+        App::new()
+            .insert_resource(args)
+            .add_plugins(MinimalPlugins)
+            .add_plugins(TestArchivePlugin)
+            .run();
+        return;
+    };
+    // 正常模式下使用 DefaultPlugins
     App::new()
-        .add_plugins(MinimalPlugins)
-        .add_plugins(ArchivePlugin)
-        .add_systems(Startup, parse_args)
+        .insert_resource(args)
+        .add_plugins(DefaultPlugins)
         .run();
 }
 
-#[derive(Parser)]
-struct Args {
+#[derive(Parser, Resource)]
+struct ExecArgs {
     #[arg(long)]
     test_archive_path: Option<PathBuf>,
-}
-
-fn parse_args(mut scan_archives_writer: MessageWriter<ScanArchives>) {
-    let args = Args::parse();
-    if let Some(path) = args.test_archive_path {
-        scan_archives_writer.write(ScanArchives(path));
-    }
 }

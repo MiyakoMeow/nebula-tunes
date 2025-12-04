@@ -10,6 +10,8 @@ use chardetng::EncodingDetector;
 use futures_lite::io::BufReader;
 use futures_lite::{StreamExt, stream};
 
+use crate::ExecArgs;
+
 #[derive(Message)]
 pub struct ArchiveFound(pub PathBuf);
 
@@ -28,20 +30,30 @@ struct ReadTasks(Vec<(PathBuf, Task<Result<Vec<String>>>)>);
 #[derive(Resource)]
 struct PendingTasks(usize);
 
-pub struct ArchivePlugin;
+pub struct TestArchivePlugin;
 
-impl Plugin for ArchivePlugin {
+impl Plugin for TestArchivePlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<ArchiveFound>()
             .add_message::<ArchiveReadFinished>()
             .add_message::<ScanArchives>()
             .insert_resource(ReadTasks::default())
             .insert_resource(PendingTasks(0))
+            .add_systems(Startup, parse_args_test_archive)
             .add_systems(Startup, on_scan_message)
             .add_systems(
                 Update,
                 (spawn_read_tasks, poll_read_tasks, print_and_exit_on_done),
             );
+    }
+}
+
+fn parse_args_test_archive(
+    args: Res<ExecArgs>,
+    mut scan_archives_writer: MessageWriter<ScanArchives>,
+) {
+    if let Some(path) = &args.test_archive_path {
+        scan_archives_writer.write(ScanArchives(path.to_path_buf()));
     }
 }
 
