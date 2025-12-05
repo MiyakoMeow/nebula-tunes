@@ -37,10 +37,11 @@ impl Plugin for TestArchivePlugin {
         app.add_message::<ArchiveFound>()
             .add_message::<ArchiveReadFinished>()
             .add_message::<ScanArchives>()
+            .add_message::<AppExit>()
             .insert_resource(ReadTasks::default())
             .insert_resource(PendingTasks(0))
             .add_systems(Startup, parse_args_test_archive)
-            .add_systems(Startup, on_scan_message)
+            .add_systems(Startup, on_scan_message.after(parse_args_test_archive))
             .add_systems(
                 Update,
                 (spawn_read_tasks, poll_read_tasks, print_and_exit_on_done),
