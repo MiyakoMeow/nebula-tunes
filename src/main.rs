@@ -15,7 +15,10 @@ use std::{
 };
 
 use bevy::{
-    asset::{AssetPath, io::AssetSourceBuilder},
+    asset::{
+        AssetPath, AssetPlugin, UnapprovedPathMode,
+        io::{AssetSourceBuilder, AssetSourceId},
+    },
     audio::{AudioPlayer, AudioSource, PlaybackSettings},
     platform::collections::HashMap,
     prelude::*,
@@ -26,6 +29,40 @@ use clap::Parser;
 
 mod test_archive_plugin;
 use test_archive_plugin::TestArchivePlugin;
+
+fn choose_paths_by_ext(path: &Path, exts: &[&str]) -> Vec<PathBuf> {
+    let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+        return Vec::new();
+    };
+    let parent = path.parent().unwrap_or(Path::new("."));
+    let entries: Vec<(String, String, PathBuf)> = std::fs::read_dir(parent)
+        .map(|rd| {
+            rd.filter_map(|r| {
+                let p = r.ok()?.path();
+                let is_file = std::fs::metadata(&p).ok()?.is_file();
+                if !is_file {
+                    return None;
+                }
+                let fs_stem = p.file_stem()?.to_str()?.to_string();
+                let fs_ext = p.extension()?.to_str()?.to_string();
+                Some((fs_stem, fs_ext, p))
+            })
+            .collect()
+        })
+        .unwrap_or_default();
+
+    exts.iter()
+        .flat_map(|ext| {
+            entries.iter().filter_map(|(s, e, p)| {
+                if s == stem && e.eq_ignore_ascii_case(ext) {
+                    Some(p.clone())
+                } else {
+                    None
+                }
+            })
+        })
+        .collect()
+}
 
 fn main() {
     let args = ExecArgs::parse();
@@ -40,18 +77,12 @@ fn main() {
     };
     // 正常模式下使用 DefaultPlugins
     let mut app = App::new();
-    let bms_dir = args
-        .bms_path
-        .as_ref()
-        .and_then(|p| p.parent().map(Path::to_path_buf));
-    if let Some(dir) = bms_dir.as_ref() {
-        app.register_asset_source(
-            "bms",
-            AssetSourceBuilder::platform_default(&dir.to_string_lossy(), None),
-        );
-    }
+    app.register_asset_source("fs", AssetSourceBuilder::platform_default(".", None));
     app.insert_resource(args)
-        .add_plugins(DefaultPlugins)
+        .add_plugins(DefaultPlugins.set(AssetPlugin {
+            unapproved_path_mode: UnapprovedPathMode::Deny,
+            ..Default::default()
+        }))
         .add_systems(Startup, load_bms_file)
         .add_systems(Update, (start_when_audio_ready, process_chart_events))
         .run();
@@ -97,11 +128,13 @@ fn load_bms_file(mut commands: Commands, asset_server: Res<AssetServer>, args: R
     let mut audio_paths = HashMap::new();
     let bms_dir = bms_path.parent().unwrap_or(Path::new("."));
     for (id, audio_path) in processor.audio_files() {
-        let audio_abs_path = bms_dir.join(audio_path);
-        let ap = AssetPath::from_path(&audio_abs_path);
-        let handle: Handle<AudioSource> = asset_server.load(ap);
+        let base = bms_dir.join(audio_path);
+        let candidates = choose_paths_by_ext(&base, &["flac", "wav", "ogg", "mp3"]);
+        let chosen = candidates.first().cloned().unwrap_or(base);
+        let ap = AssetPath::from_path(&chosen).with_source(AssetSourceId::from("fs"));
+        let handle: Handle<AudioSource> = asset_server.load_override(ap);
         audio_handles.insert(id, handle);
-        audio_paths.insert(id, audio_abs_path);
+        audio_paths.insert(id, chosen);
     }
     commands.insert_resource(BmsProcessStatus {
         processor,
