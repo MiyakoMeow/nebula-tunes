@@ -26,6 +26,9 @@ features = [
     "zstd",
 ]
 
+[dependencies.bms-rs]
+git = "https://github.com/MikuroXina/bms-rs"
+
 # Enable a small amount of optimization in the dev profile.
 [profile.dev]
 opt-level = 1
