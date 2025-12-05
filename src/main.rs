@@ -71,6 +71,7 @@ struct BmsProcessStatus {
     audio_handles: HashMap<WavId, Handle<AudioSource>>,
     audio_paths: HashMap<WavId, PathBuf>,
     started: bool,
+    warned_missing: bool,
 }
 
 fn load_bms_file(mut commands: Commands, asset_server: Res<AssetServer>, args: Res<ExecArgs>) {
@@ -107,6 +108,7 @@ fn load_bms_file(mut commands: Commands, asset_server: Res<AssetServer>, args: R
         audio_handles,
         audio_paths,
         started: false,
+        warned_missing: false,
     });
 }
 
@@ -123,7 +125,7 @@ fn start_when_audio_ready(mut status: ResMut<BmsProcessStatus>, assets: Res<Asse
     if missing.is_empty() {
         status.processor.start_play(SystemTime::now());
         status.started = true;
-    } else {
+    } else if !status.warned_missing {
         for id in missing {
             if let Some(p) = status.audio_paths.get(&id) {
                 eprintln!("音频未载入: #WAV{:03} -> {}", id.0, p.to_string_lossy());
@@ -131,6 +133,7 @@ fn start_when_audio_ready(mut status: ResMut<BmsProcessStatus>, assets: Res<Asse
                 eprintln!("音频未载入: #WAV{:03}", id.0);
             }
         }
+        status.warned_missing = true;
     }
 }
 
@@ -144,24 +147,16 @@ fn process_chart_events(
     }
     let now = SystemTime::now();
     let handles = status.audio_handles.clone();
-    let paths = status.audio_paths.clone();
     for evp in status.processor.update(now) {
         match evp.event() {
             ChartEvent::Note {
                 wav_id: Some(wav), ..
             }
             | ChartEvent::Bgm { wav_id: Some(wav) } => {
-                if let Some(handle) = handles.get(wav) {
-                    if assets.get(handle).is_some() {
-                        commands
-                            .spawn((AudioPlayer::new(handle.clone()), PlaybackSettings::DESPAWN));
-                    } else if let Some(p) = paths.get(wav) {
-                        eprintln!("音频尚未就绪: #WAV{:03} -> {}", wav.0, p.to_string_lossy());
-                    } else {
-                        eprintln!("音频尚未就绪: #WAV{:03}", wav.0);
-                    }
-                } else {
-                    eprintln!("缺少音频句柄: #WAV{:03}", wav.0);
+                if let Some(handle) = handles.get(wav)
+                    && assets.get(handle).is_some()
+                {
+                    commands.spawn((AudioPlayer::new(handle.clone()), PlaybackSettings::DESPAWN));
                 }
             }
             _ => {}
