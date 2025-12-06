@@ -180,19 +180,19 @@ fn process_chart_events(
     }
     let now = SystemTime::now();
     let handles = status.audio_handles.clone();
+    let mut to_spawn: Vec<(AudioPlayer, PlaybackSettings)> = Vec::new();
     for evp in status.processor.update(now) {
-        match evp.event() {
-            ChartEvent::Note {
-                wav_id: Some(wav), ..
-            }
-            | ChartEvent::Bgm { wav_id: Some(wav) } => {
-                if let Some(handle) = handles.get(wav)
-                    && assets.get(handle).is_some()
-                {
-                    commands.spawn((AudioPlayer::new(handle.clone()), PlaybackSettings::DESPAWN));
-                }
-            }
-            _ => {}
+        if let ChartEvent::Note {
+            wav_id: Some(wav), ..
         }
+        | ChartEvent::Bgm { wav_id: Some(wav) } = evp.event()
+            && let Some(handle) = handles.get(wav)
+            && assets.get(handle).is_some()
+        {
+            to_spawn.push((AudioPlayer::new(handle.clone()), PlaybackSettings::DESPAWN));
+        }
+    }
+    if !to_spawn.is_empty() {
+        commands.spawn_batch(to_spawn);
     }
 }
