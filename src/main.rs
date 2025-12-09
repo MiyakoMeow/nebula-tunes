@@ -11,7 +11,7 @@
 use std::{
     path::Path,
     path::PathBuf,
-    time::{Duration, SystemTime},
+    time::{Duration, Instant},
 };
 
 use bevy::{
@@ -121,8 +121,10 @@ fn load_bms_file(mut commands: Commands, asset_server: Res<AssetServer>, args: R
     let base_bpm = StartBpmGenerator
         .generate(&bms)
         .unwrap_or(BaseBpm(120.0.into()));
-    let processor =
-        BmsProcessor::new::<KeyLayoutBeat>(&bms, base_bpm, Duration::from_secs_f32(0.6));
+    let processor = BmsProcessor::new::<KeyLayoutBeat>(
+        &bms,
+        VisibleRangePerBpm::new(&base_bpm, Duration::from_secs_f32(0.6)),
+    );
     // Load audio
     let mut audio_handles = HashMap::new();
     let mut audio_paths = HashMap::new();
@@ -156,7 +158,7 @@ fn start_when_audio_ready(mut status: ResMut<BmsProcessStatus>, assets: Res<Asse
         }
     }
     if missing.is_empty() {
-        status.processor.start_play(SystemTime::now());
+        status.processor.start_play(Instant::now());
         status.started = true;
     } else if !status.warned_missing {
         for id in missing {
@@ -178,7 +180,7 @@ fn process_chart_events(
     if !status.started {
         return;
     }
-    let now = SystemTime::now();
+    let now = Instant::now();
     let handles = status.audio_handles.clone();
     let mut to_spawn: Vec<(AudioPlayer, PlaybackSettings)> = Vec::new();
     for evp in status.processor.update(now) {
