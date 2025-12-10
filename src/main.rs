@@ -14,6 +14,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+use anyhow::Result;
+use async_fs as afs;
 use bevy::{
     asset::{
         AssetPath, AssetPlugin, UnapprovedPathMode,
@@ -22,34 +24,45 @@ use bevy::{
     audio::{AudioPlayer, AudioSource, PlaybackSettings},
     platform::collections::HashMap,
     prelude::*,
+    tasks::{IoTaskPool, Task, futures::check_ready},
 };
 use bms_rs::{bms::prelude::*, chart_process::prelude::*};
 use chardetng::EncodingDetector;
 use clap::Parser;
+use futures_lite::StreamExt;
 
 mod test_archive_plugin;
 use test_archive_plugin::TestArchivePlugin;
 
-fn choose_paths_by_ext(path: &Path, exts: &[&str]) -> Vec<PathBuf> {
+async fn choose_paths_by_ext_async(path: PathBuf, exts: &[&str]) -> Vec<PathBuf> {
     let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
         return Vec::new();
     };
     let parent = path.parent().unwrap_or(Path::new("."));
-    let entries: Vec<(String, String, PathBuf)> = std::fs::read_dir(parent)
-        .map(|rd| {
-            rd.filter_map(|r| {
-                let p = r.ok()?.path();
-                let is_file = std::fs::metadata(&p).ok()?.is_file();
-                if !is_file {
-                    return None;
+    let mut entries: Vec<(String, String, PathBuf)> = Vec::new();
+    if let Ok(mut dir) = afs::read_dir(parent).await {
+        while let Some(res) = dir.next().await {
+            if let Ok(entry) = res
+                && let Ok(ft) = entry.file_type().await
+            {
+                if !ft.is_file() {
+                    continue;
                 }
-                let fs_stem = p.file_stem()?.to_str()?.to_string();
-                let fs_ext = p.extension()?.to_str()?.to_string();
-                Some((fs_stem, fs_ext, p))
-            })
-            .collect()
-        })
-        .unwrap_or_default();
+                let p = entry.path();
+                let fs_stem = p
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .map(std::string::ToString::to_string);
+                let fs_ext = p
+                    .extension()
+                    .and_then(|s| s.to_str())
+                    .map(std::string::ToString::to_string);
+                if let (Some(fs_stem), Some(fs_ext)) = (fs_stem, fs_ext) {
+                    entries.push((fs_stem, fs_ext, p));
+                }
+            }
+        }
+    }
 
     exts.iter()
         .flat_map(|ext| {
@@ -62,6 +75,38 @@ fn choose_paths_by_ext(path: &Path, exts: &[&str]) -> Vec<PathBuf> {
             })
         })
         .collect()
+}
+
+#[derive(Resource)]
+struct BmsLoadTask(Task<Result<(BmsProcessor, HashMap<WavId, PathBuf>)>>);
+
+async fn load_bms_and_collect_paths(
+    bms_path: PathBuf,
+) -> Result<(BmsProcessor, HashMap<WavId, PathBuf>)> {
+    let bms_bytes = afs::read(&bms_path).await?;
+    let mut det = EncodingDetector::new();
+    det.feed(&bms_bytes, true);
+    let enc = det.guess(None, true);
+    let (bms_str, _, _) = enc.decode(&bms_bytes);
+    let BmsOutput { bms, warnings: _ } = bms_rs::bms::parse_bms(&bms_str, default_config());
+    let bms = bms.unwrap();
+    let base_bpm = StartBpmGenerator
+        .generate(&bms)
+        .unwrap_or(BaseBpm(120.0.into()));
+    let processor = BmsProcessor::new::<KeyLayoutBeat>(
+        &bms,
+        VisibleRangePerBpm::new(&base_bpm, Duration::from_secs_f32(0.6)),
+    );
+    let bms_dir = bms_path.parent().unwrap_or(Path::new(".")).to_path_buf();
+    let mut audio_paths: HashMap<WavId, PathBuf> = HashMap::new();
+    for (id, audio_path) in processor.audio_files() {
+        let base = bms_dir.join(audio_path);
+        let candidates =
+            choose_paths_by_ext_async(base.clone(), &["flac", "wav", "ogg", "mp3"]).await;
+        let chosen = candidates.first().cloned().unwrap_or(base);
+        audio_paths.insert(id, chosen);
+    }
+    Ok((processor, audio_paths))
 }
 
 fn main() {
@@ -88,6 +133,7 @@ fn main() {
         .add_systems(
             Update,
             (
+                poll_bms_load_task,
                 start_when_audio_ready,
                 process_chart_events,
                 render_visible_chart,
@@ -176,49 +222,52 @@ fn setup_scene_7k(mut commands: Commands) {
     commands.insert_resource(ChartVisualState::default());
 }
 
-fn load_bms_file(mut commands: Commands, asset_server: Res<AssetServer>, args: Res<ExecArgs>) {
-    let Some(bms_path) = args.bms_path.as_ref() else {
+fn load_bms_file(mut commands: Commands, args: Res<ExecArgs>) {
+    let Some(bms_path) = args.bms_path.clone() else {
         return;
     };
-    let bms_bytes = std::fs::read(bms_path).unwrap();
-    // Parse Bms
-    let mut det = EncodingDetector::new();
-    det.feed(&bms_bytes, true);
-    let enc = det.guess(None, true);
-    let (bms_str, _, _) = enc.decode(&bms_bytes);
-    let BmsOutput { bms, warnings: _ } = bms_rs::bms::parse_bms(&bms_str, default_config());
-    let bms = bms.unwrap();
-    // Setup Processor
-    let base_bpm = StartBpmGenerator
-        .generate(&bms)
-        .unwrap_or(BaseBpm(120.0.into()));
-    let processor = BmsProcessor::new::<KeyLayoutBeat>(
-        &bms,
-        VisibleRangePerBpm::new(&base_bpm, Duration::from_secs_f32(0.6)),
-    );
-    // Load audio
-    let mut audio_handles = HashMap::new();
-    let mut audio_paths = HashMap::new();
-    let bms_dir = bms_path.parent().unwrap_or(Path::new("."));
-    for (id, audio_path) in processor.audio_files() {
-        let base = bms_dir.join(audio_path);
-        let candidates = choose_paths_by_ext(&base, &["flac", "wav", "ogg", "mp3"]);
-        let chosen = candidates.first().cloned().unwrap_or(base);
-        let ap = AssetPath::from_path(&chosen).with_source(AssetSourceId::from("fs"));
-        let handle: Handle<AudioSource> = asset_server.load_override(ap);
-        audio_handles.insert(id, handle);
-        audio_paths.insert(id, chosen);
-    }
-    commands.insert_resource(BmsProcessStatus {
-        processor,
-        audio_handles,
-        audio_paths,
-        started: false,
-        warned_missing: false,
-    });
+    let pool = IoTaskPool::get();
+    let task = pool.spawn(load_bms_and_collect_paths(bms_path));
+    commands.insert_resource(BmsLoadTask(task));
 }
 
-fn start_when_audio_ready(mut status: ResMut<BmsProcessStatus>, assets: Res<Assets<AudioSource>>) {
+fn poll_bms_load_task(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    task_res: Option<ResMut<BmsLoadTask>>,
+) {
+    let Some(mut task) = task_res else {
+        return;
+    };
+    if let Some(result) = check_ready(&mut task.0) {
+        match result {
+            Ok((processor, audio_paths)) => {
+                let mut audio_handles = HashMap::new();
+                for (id, chosen) in &audio_paths {
+                    let ap = AssetPath::from_path(chosen).with_source(AssetSourceId::from("fs"));
+                    let handle: Handle<AudioSource> = asset_server.load_override(ap);
+                    audio_handles.insert(*id, handle);
+                }
+                commands.insert_resource(BmsProcessStatus {
+                    processor,
+                    audio_handles,
+                    audio_paths,
+                    started: false,
+                    warned_missing: false,
+                });
+            }
+            Err(e) => {
+                eprintln!("{}", e);
+            }
+        }
+        commands.remove_resource::<BmsLoadTask>();
+    }
+}
+
+fn start_when_audio_ready(status: Option<ResMut<BmsProcessStatus>>, assets: Res<Assets<AudioSource>>) {
+    let Some(mut status) = status else {
+        return;
+    };
     if status.started {
         return;
     }
@@ -246,9 +295,12 @@ fn start_when_audio_ready(mut status: ResMut<BmsProcessStatus>, assets: Res<Asse
 
 fn process_chart_events(
     mut commands: Commands,
-    mut status: ResMut<BmsProcessStatus>,
+    status: Option<ResMut<BmsProcessStatus>>,
     assets: Res<Assets<AudioSource>>,
 ) {
+    let Some(mut status) = status else {
+        return;
+    };
     if !status.started {
         return;
     }
@@ -278,10 +330,13 @@ fn process_chart_events(
 
 fn render_visible_chart(
     mut commands: Commands,
-    mut status: ResMut<BmsProcessStatus>,
+    status: Option<ResMut<BmsProcessStatus>>,
     mut vis: ResMut<ChartVisualState>,
     mut q_notes: Query<(&mut Transform, &mut Visibility), With<NoteMarker>>,
 ) {
+    let Some(mut status) = status else {
+        return;
+    };
     if !status.started {
         return;
     }
