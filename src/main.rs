@@ -22,59 +22,66 @@ use bevy::{
         io::{AssetSourceBuilder, AssetSourceId},
     },
     audio::{AudioPlayer, AudioSource, PlaybackSettings},
-    platform::collections::HashMap,
+    platform::collections::{HashMap, HashSet},
     prelude::*,
     tasks::{IoTaskPool, Task, futures::check_ready},
 };
 use bms_rs::{bms::prelude::*, chart_process::prelude::*};
 use chardetng::EncodingDetector;
 use clap::Parser;
-use futures_lite::StreamExt;
+use futures_lite::{StreamExt, stream};
 
 mod test_archive_plugin;
 use test_archive_plugin::TestArchivePlugin;
 
-async fn choose_paths_by_ext_async(path: PathBuf, exts: &[&str]) -> Vec<PathBuf> {
-    let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
-        return Vec::new();
-    };
-    let parent = path.parent().unwrap_or(Path::new("."));
+async fn choose_paths_by_ext_async(
+    parent: &Path,
+    children: &[PathBuf],
+    exts: &[&str],
+) -> HashMap<String, PathBuf> {
+    let dirs: HashSet<PathBuf> = std::iter::once(parent.to_path_buf())
+        .chain(
+            children
+                .iter()
+                .map(|c| parent.join(c))
+                .map(|p| p.parent().unwrap_or(parent).to_path_buf()),
+        )
+        .collect();
+
     let mut entries: Vec<(String, String, PathBuf)> = Vec::new();
-    if let Ok(mut dir) = afs::read_dir(parent).await {
-        while let Some(res) = dir.next().await {
-            if let Ok(entry) = res
-                && let Ok(ft) = entry.file_type().await
-            {
+    for dir_path in dirs {
+        let Ok(mut dir) = afs::read_dir(&dir_path).await else {
+            continue;
+        };
+        let raw: Vec<Result<afs::DirEntry, std::io::Error>> = StreamExt::collect(&mut dir).await;
+        let Ok(items) = raw.into_iter().collect::<Result<Vec<_>, _>>() else {
+            continue;
+        };
+        let collected: Vec<Option<(String, String, PathBuf)>> = stream::iter(items)
+            .then(|entry| async move {
+                let Ok(ft) = entry.file_type().await else {
+                    return None;
+                };
                 if !ft.is_file() {
-                    continue;
+                    return None;
                 }
                 let p = entry.path();
-                let fs_stem = p
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .map(std::string::ToString::to_string);
-                let fs_ext = p
-                    .extension()
-                    .and_then(|s| s.to_str())
-                    .map(std::string::ToString::to_string);
-                if let (Some(fs_stem), Some(fs_ext)) = (fs_stem, fs_ext) {
-                    entries.push((fs_stem, fs_ext, p));
-                }
-            }
-        }
+                let stem = p.file_stem().and_then(|s| s.to_str()).map(str::to_string)?;
+                let ext = p.extension().and_then(|s| s.to_str()).map(str::to_string)?;
+                Some((stem, ext, p))
+            })
+            .collect()
+            .await;
+        entries.extend(collected.into_iter().flatten());
     }
 
-    exts.iter()
-        .flat_map(|ext| {
-            entries.iter().filter_map(|(s, e, p)| {
-                if s == stem && e.eq_ignore_ascii_case(ext) {
-                    Some(p.clone())
-                } else {
-                    None
-                }
-            })
-        })
-        .collect()
+    let mut found: HashMap<String, PathBuf> = HashMap::new();
+    for (stem, e, p) in entries.into_iter() {
+        if exts.iter().any(|x| e.eq_ignore_ascii_case(x)) {
+            found.entry(stem).or_insert(p);
+        }
+    }
+    found
 }
 
 #[derive(Resource)]
@@ -99,11 +106,20 @@ async fn load_bms_and_collect_paths(
     );
     let bms_dir = bms_path.parent().unwrap_or(Path::new(".")).to_path_buf();
     let mut audio_paths: HashMap<WavId, PathBuf> = HashMap::new();
-    for (id, audio_path) in processor.audio_files() {
+    let child_list: Vec<PathBuf> = processor
+        .audio_files()
+        .into_values()
+        .map(std::path::Path::to_path_buf)
+        .collect();
+    let index =
+        choose_paths_by_ext_async(&bms_dir, &child_list, &["flac", "wav", "ogg", "mp3"]).await;
+    for (id, audio_path) in processor.audio_files().into_iter() {
+        let stem = audio_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .map(std::string::ToString::to_string);
         let base = bms_dir.join(audio_path);
-        let candidates =
-            choose_paths_by_ext_async(base.clone(), &["flac", "wav", "ogg", "mp3"]).await;
-        let chosen = candidates.first().cloned().unwrap_or(base);
+        let chosen = stem.and_then(|s| index.get(&s).cloned()).unwrap_or(base);
         audio_paths.insert(id, chosen);
     }
     Ok((processor, audio_paths))
@@ -264,7 +280,10 @@ fn poll_bms_load_task(
     }
 }
 
-fn start_when_audio_ready(status: Option<ResMut<BmsProcessStatus>>, assets: Res<Assets<AudioSource>>) {
+fn start_when_audio_ready(
+    status: Option<ResMut<BmsProcessStatus>>,
+    assets: Res<Assets<AudioSource>>,
+) {
     let Some(mut status) = status else {
         return;
     };
