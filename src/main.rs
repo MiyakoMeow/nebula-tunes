@@ -114,7 +114,7 @@ struct BmsProcessStatus {
 }
 
 #[derive(Component)]
-struct NoteMarker(ChartEventId);
+struct NoteMarker;
 
 #[derive(Resource, Default)]
 struct ChartVisualState {
@@ -280,7 +280,7 @@ fn render_visible_chart(
     mut commands: Commands,
     mut status: ResMut<BmsProcessStatus>,
     mut vis: ResMut<ChartVisualState>,
-    mut q_notes: Query<&mut Transform, With<NoteMarker>>,
+    mut q_notes: Query<(&mut Transform, &mut Visibility), With<NoteMarker>>,
 ) {
     if !status.started {
         return;
@@ -300,9 +300,10 @@ fn render_visible_chart(
         let x = lane_x(idx);
         let y = -VISIBLE_HEIGHT / 2.0 + ev.display_ratio().as_f64() as f32 * VISIBLE_HEIGHT;
         if let Some(entity) = vis.notes.get(&ev.id()) {
-            if let Ok(mut tf) = q_notes.get_mut(*entity) {
+            if let Ok((mut tf, mut v)) = q_notes.get_mut(*entity) {
                 tf.translation.x = x;
                 tf.translation.y = y;
+                *v = Visibility::Visible;
             }
         } else {
             let entity = commands
@@ -316,7 +317,7 @@ fn render_visible_chart(
                     GlobalTransform::default(),
                     Visibility::default(),
                     InheritedVisibility::default(),
-                    NoteMarker(ev.id()),
+                    NoteMarker,
                 ))
                 .id();
             vis.notes.insert(ev.id(), entity);
@@ -330,8 +331,10 @@ fn render_visible_chart(
         .cloned()
         .collect();
     for id in obsolete {
-        if let Some(entity) = vis.notes.remove(&id) {
-            commands.entity(entity).despawn();
+        if let Some(&entity) = vis.notes.get(&id)
+            && let Ok((_, mut v)) = q_notes.get_mut(entity)
+        {
+            *v = Visibility::Hidden;
         }
     }
 }
