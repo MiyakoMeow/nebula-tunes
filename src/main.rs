@@ -8,11 +8,7 @@
 #![warn(clippy::redundant_else)]
 #![warn(clippy::redundant_feature_names)]
 
-use std::{
-    path::Path,
-    path::PathBuf,
-    time::{Duration, Instant},
-};
+use std::{path::Path, path::PathBuf, time::Duration};
 
 use anyhow::Result;
 use async_fs as afs;
@@ -30,6 +26,7 @@ use bms_rs::{bms::prelude::*, chart_process::prelude::*};
 use chardetng::EncodingDetector;
 use clap::Parser;
 use futures_lite::{StreamExt, stream};
+use gametime::{TimeSpan, TimeStamp};
 
 mod test_archive_plugin;
 use test_archive_plugin::TestArchivePlugin;
@@ -102,7 +99,10 @@ async fn load_bms_and_collect_paths(
         .unwrap_or(BaseBpm(120.0.into()));
     let processor = BmsProcessor::new::<KeyLayoutBeat>(
         &bms,
-        VisibleRangePerBpm::new(&base_bpm, Duration::from_secs_f32(0.6)),
+        VisibleRangePerBpm::new(
+            &base_bpm,
+            TimeSpan::from_duration(Duration::from_secs_f32(0.6)),
+        ),
     );
     let bms_dir = bms_path.parent().unwrap_or(Path::new(".")).to_path_buf();
     let mut audio_paths: HashMap<WavId, PathBuf> = HashMap::new();
@@ -140,6 +140,7 @@ fn main() {
     let mut app = App::new();
     app.register_asset_source("fs", AssetSourceBuilder::platform_default(".", None));
     app.insert_resource(args)
+        .insert_resource(NowStamp::default())
         .add_plugins(DefaultPlugins.set(AssetPlugin {
             unapproved_path_mode: UnapprovedPathMode::Deny,
             ..Default::default()
@@ -149,11 +150,13 @@ fn main() {
         .add_systems(
             Update,
             (
+                update_now_stamp,
                 poll_bms_load_task,
                 start_when_audio_ready,
                 process_chart_events,
                 render_visible_chart,
-            ),
+            )
+                .chain(),
         )
         .run();
 }
@@ -181,6 +184,15 @@ struct NoteMarker;
 #[derive(Resource, Default)]
 struct ChartVisualState {
     notes: HashMap<ChartEventId, Entity>,
+}
+
+#[derive(Resource, Clone, Copy)]
+struct NowStamp(TimeStamp);
+
+impl Default for NowStamp {
+    fn default() -> Self {
+        Self(TimeStamp::start())
+    }
 }
 
 const LANE_COUNT: usize = 8;
@@ -280,9 +292,14 @@ fn poll_bms_load_task(
     }
 }
 
+fn update_now_stamp(mut now_stamp: ResMut<NowStamp>) {
+    now_stamp.0 = TimeStamp::now();
+}
+
 fn start_when_audio_ready(
     status: Option<ResMut<BmsProcessStatus>>,
     assets: Res<Assets<AudioSource>>,
+    now_stamp: Res<NowStamp>,
 ) {
     let Some(mut status) = status else {
         return;
@@ -298,7 +315,7 @@ fn start_when_audio_ready(
         };
     }
     if missing.is_empty() {
-        status.processor.start_play(Instant::now());
+        status.processor.start_play(now_stamp.0);
         status.started = true;
     } else if !status.warned_missing {
         for id in missing {
@@ -316,6 +333,7 @@ fn process_chart_events(
     mut commands: Commands,
     status: Option<ResMut<BmsProcessStatus>>,
     assets: Res<Assets<AudioSource>>,
+    now_stamp: Res<NowStamp>,
 ) {
     let Some(mut status) = status else {
         return;
@@ -323,10 +341,9 @@ fn process_chart_events(
     if !status.started {
         return;
     }
-    let now = Instant::now();
     let handles = status.audio_handles.clone();
     let mut to_spawn: Vec<(AudioPlayer, PlaybackSettings)> = Vec::new();
-    for evp in status.processor.update(now) {
+    for evp in status.processor.update(now_stamp.0) {
         let wav = match evp.event() {
             ChartEvent::Note {
                 wav_id: Some(wav), ..
@@ -352,6 +369,7 @@ fn render_visible_chart(
     status: Option<ResMut<BmsProcessStatus>>,
     mut vis: ResMut<ChartVisualState>,
     mut q_notes: Query<(&mut Transform, &mut Visibility), With<NoteMarker>>,
+    now_stamp: Res<NowStamp>,
 ) {
     let Some(mut status) = status else {
         return;
@@ -359,9 +377,8 @@ fn render_visible_chart(
     if !status.started {
         return;
     }
-    let now = Instant::now();
     let mut alive: Vec<ChartEventId> = Vec::new();
-    for ev in status.processor.visible_events(now) {
+    for ev in status.processor.visible_events(now_stamp.0) {
         let ChartEvent::Note { side, key, .. } = ev.event() else {
             continue;
         };
