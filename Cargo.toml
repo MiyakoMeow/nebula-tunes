@@ -11,27 +11,10 @@ futures-lite = "2"
 async-fs = "2"
 clap = { version = "4", features = ["derive"] }
 gametime = { version = "0.7.2", features = ["global_reference"] }
-
-[dependencies.bevy]
-version = "0.17"
-default-features = false
-features = [
-    "std",
-    "bevy_asset",
-    "bevy_audio",
-    "bevy_color",
-    "bevy_render",
-    "bevy_core_pipeline",
-    "bevy_sprite",
-    "bevy_image",
-    "bevy_camera",
-    "bevy_window",
-    "bevy_winit",
-    "wav",
-    "mp3",
-    "flac",
-    "vorbis",
-]
+wgpu = { version = "28.0.0", default-features = false, features = ["wgsl", "vulkan"] }
+winit = "0.30.12"
+pollster = "0.4.0"
+bytemuck = "1.24.0"
 
 [dependencies.bms-rs]
 git = "https://github.com/MikuroXina/bms-rs"

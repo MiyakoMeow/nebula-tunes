@@ -2,11 +2,8 @@ use std::{path::Path, path::PathBuf};
 
 use anyhow::Result;
 use async_fs as afs;
-use bevy::{
-    platform::collections::{HashMap, HashSet},
-    prelude::*,
-};
 use futures_lite::{StreamExt, stream};
+use std::collections::{HashMap, HashSet};
 
 pub async fn choose_paths_by_ext_async(
     parent: &Path,

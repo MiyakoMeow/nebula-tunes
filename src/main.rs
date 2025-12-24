@@ -10,59 +10,388 @@
 
 mod filesystem;
 
-use std::{path::Path, path::PathBuf, time::Duration};
+use std::{collections::HashMap, path::Path, path::PathBuf, time::Duration};
 
 use anyhow::Result;
 use async_fs as afs;
-use bevy::{
-    asset::{
-        AssetPath, AssetPlugin, UnapprovedPathMode,
-        io::{AssetSourceBuilder, AssetSourceId},
-    },
-    audio::{AudioPlayer, AudioSource, PlaybackSettings},
-    platform::collections::HashMap,
-    prelude::*,
-    tasks::{IoTaskPool, Task, futures::check_ready},
-};
 use bms_rs::{bms::prelude::*, chart_process::prelude::*};
+use bytemuck::{Pod, Zeroable};
 use chardetng::EncodingDetector;
 use clap::Parser;
 use gametime::{TimeSpan, TimeStamp};
+use wgpu::util::DeviceExt;
+use winit::{
+    application::ApplicationHandler, dpi::LogicalSize, event::WindowEvent,
+    event_loop::ActiveEventLoop, event_loop::EventLoop, window::WindowId,
+};
 
-fn main() {
-    let args = ExecArgs::parse();
-    let mut app = App::new();
-    app.register_asset_source("fs", AssetSourceBuilder::platform_default(".", None));
-    app.insert_resource(args)
-        .insert_resource(NowStamp::default())
-        .add_plugins(DefaultPlugins.set(AssetPlugin {
-            unapproved_path_mode: UnapprovedPathMode::Deny,
-            ..Default::default()
-        }))
-        .add_systems(Startup, setup_scene_7k)
-        .add_systems(Startup, load_bms_file)
-        .add_systems(
-            Update,
-            (
-                update_now_stamp,
-                poll_bms_load_task,
-                start_when_audio_ready,
-                process_chart_events,
-                render_visible_chart,
-            )
-                .chain(),
-        )
-        .run();
-}
-
-#[derive(Parser, Resource)]
+#[derive(Parser)]
 struct ExecArgs {
     #[arg(long)]
     bms_path: Option<PathBuf>,
 }
 
-#[derive(Resource)]
-struct BmsLoadTask(Task<Result<(BmsProcessor, HashMap<WavId, PathBuf>)>>);
+const LANE_COUNT: usize = 8;
+const LANE_WIDTH: f32 = 60.0;
+const LANE_GAP: f32 = 8.0;
+const VISIBLE_HEIGHT: f32 = 600.0;
+const NOTE_HEIGHT: f32 = 12.0;
+
+fn total_width() -> f32 {
+    LANE_COUNT as f32 * LANE_WIDTH + (LANE_COUNT as f32 - 1.0) * LANE_GAP
+}
+
+fn lane_x(idx: usize) -> f32 {
+    let left = -total_width() / 2.0 + LANE_WIDTH / 2.0;
+    left + idx as f32 * (LANE_WIDTH + LANE_GAP)
+}
+
+fn key_to_lane(key: Key) -> Option<usize> {
+    match key {
+        Key::Scratch(_) => Some(0),
+        Key::Key(n) => match n {
+            1..=7 => Some(n as usize),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Zeroable, Pod)]
+struct Instance {
+    pos: [f32; 2],
+    size: [f32; 2],
+    color: [f32; 4],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Zeroable, Pod)]
+struct ScreenUniform {
+    size: [f32; 2],
+}
+
+struct Renderer {
+    surface: wgpu::Surface<'static>,
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    config: wgpu::SurfaceConfiguration,
+    pipeline: wgpu::RenderPipeline,
+    bind_group: wgpu::BindGroup,
+    screen_buffer: wgpu::Buffer,
+    quad_vb: wgpu::Buffer,
+    idx_buf: wgpu::Buffer,
+    instance_buf: wgpu::Buffer,
+    index_count: u32,
+    window: winit::window::Window,
+    logical_size: [f32; 2],
+}
+
+impl Renderer {
+    async fn new(window: winit::window::Window) -> Result<Self> {
+        let instance = wgpu::Instance::default();
+        let surface = unsafe {
+            instance.create_surface_unsafe(
+                wgpu::SurfaceTargetUnsafe::from_window(&window)
+                    .map_err(|e| anyhow::anyhow!(e.to_string()))?,
+            )
+        }?;
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                force_fallback_adapter: false,
+                compatible_surface: Some(&surface),
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("request_adapter failed: {:?}", e))?;
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor {
+                required_features: wgpu::Features::empty(),
+                required_limits: wgpu::Limits::default(),
+                experimental_features: wgpu::ExperimentalFeatures::disabled(),
+                memory_hints: wgpu::MemoryHints::default(),
+                trace: wgpu::Trace::Off,
+                label: None,
+            })
+            .await?;
+        let size = window.inner_size();
+        let format = surface.get_capabilities(&adapter).formats[0];
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format,
+            width: size.width,
+            height: size.height,
+            present_mode: wgpu::PresentMode::Fifo,
+            alpha_mode: wgpu::CompositeAlphaMode::Opaque,
+            view_formats: vec![],
+            desired_maximum_frame_latency: 2,
+        };
+        surface.configure(&device, &config);
+
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("rect-shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("rect.wgsl").into()),
+        });
+        let screen_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("screen-uniform"),
+            size: std::mem::size_of::<ScreenUniform>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("rect-bgl"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("rect-bg"),
+            layout: &bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: screen_buffer.as_entire_binding(),
+            }],
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("rect-pl"),
+            bind_group_layouts: &[&bind_group_layout],
+            immediate_size: 0,
+        });
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("rect-pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                buffers: &[
+                    wgpu::VertexBufferLayout {
+                        array_stride: std::mem::size_of::<[f32; 2]>() as u64,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &[wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x2,
+                            offset: 0,
+                            shader_location: 0,
+                        }],
+                    },
+                    wgpu::VertexBufferLayout {
+                        array_stride: std::mem::size_of::<Instance>() as u64,
+                        step_mode: wgpu::VertexStepMode::Instance,
+                        attributes: &[
+                            wgpu::VertexAttribute {
+                                format: wgpu::VertexFormat::Float32x2,
+                                offset: 0,
+                                shader_location: 1,
+                            },
+                            wgpu::VertexAttribute {
+                                format: wgpu::VertexFormat::Float32x2,
+                                offset: 8,
+                                shader_location: 2,
+                            },
+                            wgpu::VertexAttribute {
+                                format: wgpu::VertexFormat::Float32x4,
+                                offset: 16,
+                                shader_location: 3,
+                            },
+                        ],
+                    },
+                ],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+        let quad_vertices: [[f32; 2]; 4] = [[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]];
+        let quad_vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("quad-vb"),
+            contents: bytemuck::cast_slice(&quad_vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        let indices: [u16; 6] = [0, 1, 2, 0, 2, 3];
+        let idx_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("quad-ib"),
+            contents: bytemuck::cast_slice(&indices),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+        let instance_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("instance-buf"),
+            size: (std::mem::size_of::<Instance>() * 1024) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let logical_size = [size.width as f32, size.height as f32];
+        Ok(Self {
+            surface,
+            device,
+            queue,
+            config,
+            pipeline,
+            bind_group,
+            screen_buffer,
+            quad_vb,
+            idx_buf,
+            instance_buf,
+            index_count: 6,
+            window,
+            logical_size,
+        })
+    }
+
+    fn resize(&mut self, width: u32, height: u32) {
+        if width > 0 && height > 0 {
+            self.config.width = width;
+            self.config.height = height;
+            self.surface.configure(&self.device, &self.config);
+            self.logical_size = [width as f32, height as f32];
+        }
+    }
+
+    fn upload_screen_uniform(&self) {
+        let uni = ScreenUniform {
+            size: self.logical_size,
+        };
+        self.queue
+            .write_buffer(&self.screen_buffer, 0, bytemuck::bytes_of(&uni));
+    }
+
+    fn draw(&self, instances: &[Instance]) -> Result<()> {
+        self.upload_screen_uniform();
+        let frame = self.surface.get_current_texture()?;
+        let view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        self.queue
+            .write_buffer(&self.instance_buf, 0, bytemuck::cast_slice(instances));
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("encoder"),
+            });
+        {
+            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("render-pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            rpass.set_pipeline(&self.pipeline);
+            rpass.set_bind_group(0, &self.bind_group, &[]);
+            rpass.set_vertex_buffer(0, self.quad_vb.slice(..));
+            rpass.set_vertex_buffer(1, self.instance_buf.slice(..));
+            rpass.set_index_buffer(self.idx_buf.slice(..), wgpu::IndexFormat::Uint16);
+            rpass.draw_indexed(0..self.index_count, 0, 0..instances.len() as u32);
+        }
+        self.queue.submit(Some(encoder.finish()));
+        frame.present();
+        Ok(())
+    }
+}
+
+struct App {
+    renderer: Renderer,
+    processor: Option<BmsProcessor>,
+    _audio_paths: HashMap<WavId, PathBuf>,
+    last_log_sec: u64,
+    audio_plays_this_sec: u32,
+}
+
+impl App {
+    fn start_if_ready(&mut self, now: TimeStamp) {
+        if let Some(p) = &mut self.processor
+            && p.started_at().is_none()
+        {
+            p.start_play(now);
+            self.last_log_sec = 0;
+            self.audio_plays_this_sec = 0;
+        }
+    }
+
+    fn build_instances(&mut self, now: TimeStamp) -> Vec<Instance> {
+        let mut instances: Vec<Instance> = Vec::with_capacity(1024);
+        for i in 0..LANE_COUNT {
+            instances.push(Instance {
+                pos: [lane_x(i), 0.0],
+                size: [LANE_WIDTH, VISIBLE_HEIGHT],
+                color: [0.15, 0.15, 0.18, 1.0],
+            });
+        }
+        instances.push(Instance {
+            pos: [0.0, -VISIBLE_HEIGHT / 2.0 + 2.0],
+            size: [total_width(), 4.0],
+            color: [0.9, 0.9, 0.9, 1.0],
+        });
+        if let Some(p) = self.processor.as_mut()
+            && p.started_at().is_some()
+        {
+            for ev in p.visible_events(now) {
+                let ChartEvent::Note { side, key, .. } = ev.event() else {
+                    continue;
+                };
+                if *side != PlayerSide::Player1 {
+                    continue;
+                }
+                let Some(idx) = key_to_lane(*key) else {
+                    continue;
+                };
+                let x = lane_x(idx);
+                let y = -VISIBLE_HEIGHT / 2.0 + ev.display_ratio().as_f64() as f32 * VISIBLE_HEIGHT;
+                instances.push(Instance {
+                    pos: [x, y],
+                    size: [LANE_WIDTH - 4.0, NOTE_HEIGHT],
+                    color: [0.3, 0.7, 1.0, 1.0],
+                });
+            }
+        }
+        instances
+    }
+
+    fn log_tick(&mut self, now: TimeStamp) {
+        let Some(p) = self.processor.as_mut() else {
+            return;
+        };
+        let Some(start) = p.started_at() else { return };
+        let elapsed = now.checked_elapsed_since(start).unwrap_or(TimeSpan::ZERO);
+        let sec = (elapsed.as_nanos().max(0) as u64) / 1_000_000_000;
+        if sec != self.last_log_sec {
+            let visible = p.visible_events(now).count();
+            println!(
+                "elapsed={}s visible={} audio={}",
+                sec, visible, self.audio_plays_this_sec
+            );
+            self.audio_plays_this_sec = 0;
+            self.last_log_sec = sec;
+        }
+    }
+}
 
 async fn load_bms_and_collect_paths(
     bms_path: PathBuf,
@@ -74,9 +403,13 @@ async fn load_bms_and_collect_paths(
     let (bms_str, _, _) = enc.decode(&bms_bytes);
     let BmsOutput { bms, warnings: _ } = bms_rs::bms::parse_bms(&bms_str, default_config());
     let bms = bms.unwrap();
+    // print bms info
+    println!("Title: {:?}", bms.music_info.title);
+    println!("Artist: {:?}", bms.music_info.artist);
     let base_bpm = StartBpmGenerator
         .generate(&bms)
         .unwrap_or(BaseBpm(120.0.into()));
+    println!("BaseBpm: {}", base_bpm.value());
     let processor = BmsProcessor::new::<KeyLayoutBeat>(
         &bms,
         VisibleRangePerBpm::new(
@@ -109,263 +442,86 @@ async fn load_bms_and_collect_paths(
     Ok((processor, audio_paths))
 }
 
-#[derive(Resource)]
-struct BmsProcessStatus {
-    processor: BmsProcessor,
-    audio_handles: HashMap<WavId, Handle<AudioSource>>,
-    audio_paths: HashMap<WavId, PathBuf>,
-    started: bool,
-    warned_missing: bool,
-}
-
-#[derive(Component)]
-struct NoteMarker;
-
-#[derive(Resource, Default)]
-struct ChartVisualState {
-    notes: HashMap<ChartEventId, Entity>,
-}
-
-#[derive(Resource, Clone, Copy)]
-struct NowStamp(TimeStamp);
-
-impl Default for NowStamp {
-    fn default() -> Self {
-        Self(TimeStamp::start())
-    }
-}
-
-const LANE_COUNT: usize = 8;
-const LANE_WIDTH: f32 = 60.0;
-const LANE_GAP: f32 = 8.0;
-const VISIBLE_HEIGHT: f32 = 600.0;
-const NOTE_HEIGHT: f32 = 12.0;
-
-fn total_width() -> f32 {
-    LANE_COUNT as f32 * LANE_WIDTH + (LANE_COUNT as f32 - 1.0) * LANE_GAP
-}
-
-fn lane_x(idx: usize) -> f32 {
-    let left = -total_width() / 2.0 + LANE_WIDTH / 2.0;
-    left + idx as f32 * (LANE_WIDTH + LANE_GAP)
-}
-
-fn key_to_lane(key: Key) -> Option<usize> {
-    match key {
-        Key::Scratch(_) => Some(0),
-        Key::Key(n) => match n {
-            1..=7 => Some(n as usize),
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
-fn setup_scene_7k(mut commands: Commands) {
-    commands.spawn((Camera2d, Transform::default(), GlobalTransform::default()));
-    for i in 0..LANE_COUNT {
-        commands.spawn((
-            Sprite {
-                color: Color::srgb(0.15, 0.15, 0.18),
-                custom_size: Some(Vec2::new(LANE_WIDTH, VISIBLE_HEIGHT)),
-                ..Default::default()
-            },
-            Transform::from_xyz(lane_x(i), 0.0, 0.0),
-            GlobalTransform::default(),
-            Visibility::default(),
-            InheritedVisibility::default(),
-        ));
-    }
-    commands.spawn((
-        Sprite {
-            color: Color::srgb(0.9, 0.9, 0.9),
-            custom_size: Some(Vec2::new(total_width(), 4.0)),
-            ..Default::default()
-        },
-        Transform::from_xyz(0.0, -VISIBLE_HEIGHT / 2.0 + 2.0, 1.0),
-        GlobalTransform::default(),
-        Visibility::default(),
-        InheritedVisibility::default(),
-    ));
-    commands.insert_resource(ChartVisualState::default());
-}
-
-fn load_bms_file(mut commands: Commands, args: Res<ExecArgs>) {
-    let Some(bms_path) = args.bms_path.clone() else {
-        return;
+fn main() -> Result<()> {
+    let args = ExecArgs::parse();
+    let event_loop = EventLoop::new()?;
+    let (pre_processor, pre_audio_paths) = if let Some(bms_path) = args.bms_path {
+        let (p, ap) = pollster::block_on(load_bms_and_collect_paths(bms_path))?;
+        (Some(p), ap)
+    } else {
+        (None, HashMap::new())
     };
-    let pool = IoTaskPool::get();
-    let task = pool.spawn(load_bms_and_collect_paths(bms_path));
-    commands.insert_resource(BmsLoadTask(task));
-}
-
-fn poll_bms_load_task(
-    mut commands: Commands,
-    asset_server: Res<AssetServer>,
-    task_res: Option<ResMut<BmsLoadTask>>,
-) {
-    let Some(mut task) = task_res else {
-        return;
-    };
-    if let Some(result) = check_ready(&mut task.0) {
-        match result {
-            Ok((processor, audio_paths)) => {
-                let mut audio_handles = HashMap::new();
-                for (id, chosen) in &audio_paths {
-                    let ap = AssetPath::from_path(chosen).with_source(AssetSourceId::from("fs"));
-                    let handle: Handle<AudioSource> = asset_server.load_override(ap);
-                    audio_handles.insert(*id, handle);
+    struct Handler {
+        app: Option<App>,
+        pre_processor: Option<BmsProcessor>,
+        pre_audio_paths: HashMap<WavId, PathBuf>,
+    }
+    impl ApplicationHandler for Handler {
+        fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+            let attrs = winit::window::Window::default_attributes()
+                .with_title("Nebula Tunes")
+                .with_inner_size(LogicalSize::new(
+                    total_width() as f64 + 64.0,
+                    VISIBLE_HEIGHT as f64 + 64.0,
+                ));
+            let window = match event_loop.create_window(attrs) {
+                Ok(w) => w,
+                Err(_) => return,
+            };
+            let renderer = match pollster::block_on(Renderer::new(window)) {
+                Ok(r) => r,
+                Err(_) => return,
+            };
+            self.app = Some(App {
+                renderer,
+                processor: self.pre_processor.take(),
+                _audio_paths: std::mem::take(&mut self.pre_audio_paths),
+                last_log_sec: 0,
+                audio_plays_this_sec: 0,
+            });
+        }
+        fn window_event(
+            &mut self,
+            event_loop: &ActiveEventLoop,
+            _id: WindowId,
+            event: WindowEvent,
+        ) {
+            match event {
+                WindowEvent::CloseRequested => {
+                    event_loop.exit();
                 }
-                commands.insert_resource(BmsProcessStatus {
-                    processor,
-                    audio_handles,
-                    audio_paths,
-                    started: false,
-                    warned_missing: false,
-                });
-            }
-            Err(e) => {
-                eprintln!("{}", e);
+                WindowEvent::Resized(size) => {
+                    if let Some(app) = self.app.as_mut() {
+                        app.renderer.resize(size.width, size.height);
+                        app.renderer.window.request_redraw();
+                    }
+                }
+                WindowEvent::RedrawRequested => {
+                    let now = TimeStamp::now();
+                    if let Some(app) = self.app.as_mut() {
+                        app.start_if_ready(now);
+                        if let Some(p) = app.processor.as_mut() {
+                            let _ = p.update(now);
+                        }
+                        let instances = app.build_instances(now);
+                        let _ = app.renderer.draw(&instances);
+                        app.log_tick(now);
+                    }
+                }
+                _ => {}
             }
         }
-        commands.remove_resource::<BmsLoadTask>();
+        fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+            if let Some(app) = self.app.as_mut() {
+                app.renderer.window.request_redraw();
+            }
+        }
     }
-}
-
-fn update_now_stamp(mut now_stamp: ResMut<NowStamp>) {
-    now_stamp.0 = TimeStamp::now();
-}
-
-fn start_when_audio_ready(
-    status: Option<ResMut<BmsProcessStatus>>,
-    assets: Res<Assets<AudioSource>>,
-    now_stamp: Res<NowStamp>,
-) {
-    let Some(mut status) = status else {
-        return;
+    let mut handler = Handler {
+        app: None,
+        pre_processor,
+        pre_audio_paths,
     };
-    if status.started {
-        return;
-    }
-    let mut missing: Vec<WavId> = Vec::new();
-    for (id, handle) in &status.audio_handles {
-        let Some(_) = assets.get(handle) else {
-            missing.push(*id);
-            continue;
-        };
-    }
-    if missing.is_empty() {
-        status.processor.start_play(now_stamp.0);
-        status.started = true;
-    } else if !status.warned_missing {
-        for id in missing {
-            if let Some(p) = status.audio_paths.get(&id) {
-                eprintln!("音频未载入: #WAV{:03} -> {}", id.0, p.to_string_lossy());
-            } else {
-                eprintln!("音频未载入: #WAV{:03}", id.0);
-            }
-        }
-        status.warned_missing = true;
-    }
-}
-
-fn process_chart_events(
-    mut commands: Commands,
-    status: Option<ResMut<BmsProcessStatus>>,
-    assets: Res<Assets<AudioSource>>,
-    now_stamp: Res<NowStamp>,
-) {
-    let Some(mut status) = status else {
-        return;
-    };
-    if !status.started {
-        return;
-    }
-    let handles = status.audio_handles.clone();
-    let mut to_spawn: Vec<(AudioPlayer, PlaybackSettings)> = Vec::new();
-    for evp in status.processor.update(now_stamp.0) {
-        let wav = match evp.event() {
-            ChartEvent::Note {
-                wav_id: Some(wav), ..
-            }
-            | ChartEvent::Bgm { wav_id: Some(wav) } => wav,
-            _ => continue,
-        };
-        let Some(handle) = handles.get(wav) else {
-            continue;
-        };
-        if assets.get(handle).is_none() {
-            continue;
-        }
-        to_spawn.push((AudioPlayer::new(handle.clone()), PlaybackSettings::DESPAWN));
-    }
-    if !to_spawn.is_empty() {
-        commands.spawn_batch(to_spawn);
-    }
-}
-
-fn render_visible_chart(
-    mut commands: Commands,
-    status: Option<ResMut<BmsProcessStatus>>,
-    mut vis: ResMut<ChartVisualState>,
-    mut q_notes: Query<(&mut Transform, &mut Visibility), With<NoteMarker>>,
-    now_stamp: Res<NowStamp>,
-) {
-    let Some(mut status) = status else {
-        return;
-    };
-    if !status.started {
-        return;
-    }
-    let mut alive: Vec<ChartEventId> = Vec::new();
-    for ev in status.processor.visible_events(now_stamp.0) {
-        let ChartEvent::Note { side, key, .. } = ev.event() else {
-            continue;
-        };
-        if *side != PlayerSide::Player1 {
-            continue;
-        }
-        let Some(idx) = key_to_lane(*key) else {
-            continue;
-        };
-        let x = lane_x(idx);
-        let y = -VISIBLE_HEIGHT / 2.0 + ev.display_ratio().as_f64() as f32 * VISIBLE_HEIGHT;
-        if let Some(entity) = vis.notes.get(&ev.id()) {
-            if let Ok((mut tf, mut v)) = q_notes.get_mut(*entity) {
-                tf.translation.x = x;
-                tf.translation.y = y;
-                *v = Visibility::Visible;
-            }
-        } else {
-            let entity = commands
-                .spawn((
-                    Sprite {
-                        color: Color::srgb(0.3, 0.7, 1.0),
-                        custom_size: Some(Vec2::new(LANE_WIDTH - 4.0, NOTE_HEIGHT)),
-                        ..Default::default()
-                    },
-                    Transform::from_xyz(x, y, 2.0),
-                    GlobalTransform::default(),
-                    Visibility::default(),
-                    InheritedVisibility::default(),
-                    NoteMarker,
-                ))
-                .id();
-            vis.notes.insert(ev.id(), entity);
-        }
-        alive.push(ev.id());
-    }
-    let obsolete: Vec<ChartEventId> = vis
-        .notes
-        .keys()
-        .filter(|id| !alive.contains(id))
-        .cloned()
-        .collect();
-    for id in obsolete {
-        if let Some(&entity) = vis.notes.get(&id)
-            && let Ok((_, mut v)) = q_notes.get_mut(entity)
-        {
-            *v = Visibility::Hidden;
-        }
-    }
+    event_loop.run_app(&mut handler)?;
+    Ok(())
 }
