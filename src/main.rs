@@ -28,8 +28,37 @@ use clap::Parser;
 use futures_lite::{StreamExt, stream};
 use gametime::{TimeSpan, TimeStamp};
 
-mod test_archive_plugin;
-use test_archive_plugin::TestArchivePlugin;
+fn main() {
+    let args = ExecArgs::parse();
+    let mut app = App::new();
+    app.register_asset_source("fs", AssetSourceBuilder::platform_default(".", None));
+    app.insert_resource(args)
+        .insert_resource(NowStamp::default())
+        .add_plugins(DefaultPlugins.set(AssetPlugin {
+            unapproved_path_mode: UnapprovedPathMode::Deny,
+            ..Default::default()
+        }))
+        .add_systems(Startup, setup_scene_7k)
+        .add_systems(Startup, load_bms_file)
+        .add_systems(
+            Update,
+            (
+                update_now_stamp,
+                poll_bms_load_task,
+                start_when_audio_ready,
+                process_chart_events,
+                render_visible_chart,
+            )
+                .chain(),
+        )
+        .run();
+}
+
+#[derive(Parser, Resource)]
+struct ExecArgs {
+    #[arg(long)]
+    bms_path: Option<PathBuf>,
+}
 
 async fn choose_paths_by_ext_async(
     parent: &Path,
@@ -123,50 +152,6 @@ async fn load_bms_and_collect_paths(
         audio_paths.insert(id, chosen);
     }
     Ok((processor, audio_paths))
-}
-
-fn main() {
-    let args = ExecArgs::parse();
-    // 测试模式下使用 MinimalPlugins，否则使用 DefaultPlugins
-    if args.test_archive_path.is_some() {
-        App::new()
-            .insert_resource(args)
-            .add_plugins(MinimalPlugins)
-            .add_plugins(TestArchivePlugin)
-            .run();
-        return;
-    };
-    // 正常模式下使用 DefaultPlugins
-    let mut app = App::new();
-    app.register_asset_source("fs", AssetSourceBuilder::platform_default(".", None));
-    app.insert_resource(args)
-        .insert_resource(NowStamp::default())
-        .add_plugins(DefaultPlugins.set(AssetPlugin {
-            unapproved_path_mode: UnapprovedPathMode::Deny,
-            ..Default::default()
-        }))
-        .add_systems(Startup, setup_scene_7k)
-        .add_systems(Startup, load_bms_file)
-        .add_systems(
-            Update,
-            (
-                update_now_stamp,
-                poll_bms_load_task,
-                start_when_audio_ready,
-                process_chart_events,
-                render_visible_chart,
-            )
-                .chain(),
-        )
-        .run();
-}
-
-#[derive(Parser, Resource)]
-struct ExecArgs {
-    #[arg(long)]
-    test_archive_path: Option<PathBuf>,
-    #[arg(long)]
-    bms_path: Option<PathBuf>,
 }
 
 #[derive(Resource)]

@@ -9,7 +9,6 @@ encoding_rs = "0.8"
 chardetng = "0.1"
 futures-lite = "2"
 async-fs = "2"
-async-sevenz = "0.0.3"
 clap = { version = "4", features = ["derive"] }
 gametime = { version = "0.7.2", features = ["global_reference"] }
 
@@ -32,16 +31,6 @@ features = [
     "mp3",
     "flac",
     "vorbis",
-]
-
-[dependencies.async_zip]
-version = "0.0.18"
-features = [
-    "bzip2",
-    "deflate",
-    "deflate64",
-    "xz",
-    "zstd",
 ]
 
 [dependencies.bms-rs]
