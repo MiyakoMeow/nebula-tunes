@@ -112,14 +112,16 @@ async fn main() -> Result<()> {
     };
     let (control_tx, control_rx) = mpsc::channel::<loops::ControlMsg>(1);
     let (visual_tx, visual_rx) = mpsc::channel::<Vec<Instance>>(2);
-    let (audio_tx, audio_rx) = mpsc::channel::<PathBuf>(64);
-    let _audio_handle = tokio::spawn(audio::run_audio_loop(audio_rx));
+    let (audio_tx, audio_rx) = mpsc::channel::<audio::AudioMsg>(64);
+    let (audio_event_tx, audio_event_rx) = mpsc::channel::<audio::AudioEvent>(1);
+    let _audio_handle = tokio::spawn(audio::run_audio_loop(audio_rx, audio_event_tx));
     let _main_handle = tokio::spawn(main_loop::run_main_loop(
         pre_processor,
         pre_audio_paths,
         control_rx,
         visual_tx,
         audio_tx,
+        audio_event_rx,
     ));
     let mut handler = visual::Handler::new(visual_rx, control_tx);
     event_loop.run_app(&mut handler)?;

@@ -13,6 +13,7 @@ use tokio::sync::mpsc;
 
 use crate::Instance;
 use crate::loops::ControlMsg;
+use crate::loops::audio::{AudioEvent, AudioMsg};
 use crate::loops::visual::{base_instances, build_instances_for_processor};
 
 /// 运行主循环
@@ -27,10 +28,18 @@ pub async fn run_main_loop(
     audio_paths: HashMap<WavId, PathBuf>,
     mut control_rx: mpsc::Receiver<ControlMsg>,
     visual_tx: mpsc::Sender<Vec<Instance>>,
-    audio_tx: mpsc::Sender<PathBuf>,
+    audio_tx: mpsc::Sender<AudioMsg>,
+    mut audio_event_rx: mpsc::Receiver<AudioEvent>,
 ) {
     match control_rx.recv().await {
         Some(ControlMsg::Start) => {}
+        None => return,
+    }
+    // 预加载所有音频资源，并等待完成事件
+    let files: Vec<PathBuf> = audio_paths.values().cloned().collect();
+    let _ = audio_tx.send(AudioMsg::PreloadAll { files }).await;
+    match audio_event_rx.recv().await {
+        Some(AudioEvent::PreloadFinished) => {}
         None => return,
     }
     if let Some(p) = processor.as_mut() {
@@ -57,7 +66,7 @@ pub async fn run_main_loop(
                     };
                     if let Some(wav_id) = wav_id.as_ref()
                         && let Some(path) = audio_paths.get(wav_id)
-                        && audio_tx.try_send(path.clone()).is_ok()
+                        && audio_tx.try_send(AudioMsg::Play(path.clone())).is_ok()
                     {
                         audio_plays_this_sec = audio_plays_this_sec.saturating_add(1);
                     }
@@ -65,7 +74,7 @@ pub async fn run_main_loop(
                 if let ChartEvent::Bgm { wav_id } = ev.event()
                     && let Some(wav_id) = wav_id.as_ref()
                     && let Some(path) = audio_paths.get(wav_id)
-                    && audio_tx.try_send(path.clone()).is_ok()
+                    && audio_tx.try_send(AudioMsg::Play(path.clone())).is_ok()
                 {
                     audio_plays_this_sec = audio_plays_this_sec.saturating_add(1);
                 }

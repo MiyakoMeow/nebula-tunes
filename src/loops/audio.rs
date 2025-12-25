@@ -1,17 +1,49 @@
 //! 音频播放循环
 //!
-//! 独立维护音频输出流与缓存，按队列消费播放请求。
+//! - 使用异步文件读取缓存音频数据
+//! - 支持预加载全部音频资源、每秒输出一次进度
+//! - 预加载完成后才开始播放队列
 
-use std::{collections::HashMap, path::Path, path::PathBuf, sync::Arc};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU32, Ordering},
+    },
+    time::Duration,
+};
 
 use anyhow::Result;
-use rodio::{Sink, stream::OutputStream};
+use async_fs as afs;
+use rodio::{Source, buffer::SamplesBuffer, decoder::Decoder, stream::OutputStream};
 use tokio::sync::mpsc;
+
+fn decode_bytes(bytes: Vec<u8>) -> Result<SamplesBuffer> {
+    let decoder = Decoder::new(std::io::Cursor::new(bytes))?;
+    let channels = decoder.channels();
+    let sample_rate = decoder.sample_rate();
+    let samples: Vec<f32> = decoder.collect();
+    Ok(SamplesBuffer::new(channels, sample_rate, samples))
+}
+
+/// 音频循环消息
+pub enum AudioMsg {
+    /// 预加载所有音频文件
+    PreloadAll { files: Vec<PathBuf> },
+    /// 播放单个音频文件
+    Play(PathBuf),
+}
+
+/// 音频循环事件
+pub enum AudioEvent {
+    /// 预加载完成
+    PreloadFinished,
+}
 
 struct Audio {
     stream: OutputStream,
-    sinks: Vec<Sink>,
-    cache: HashMap<PathBuf, Arc<[u8]>>,
+    decoded: HashMap<PathBuf, Arc<SamplesBuffer>>,
 }
 
 impl Audio {
@@ -19,45 +51,88 @@ impl Audio {
         let stream = rodio::OutputStreamBuilder::open_default_stream()?;
         Ok(Self {
             stream,
-            sinks: Vec::new(),
-            cache: HashMap::new(),
+            decoded: HashMap::new(),
         })
     }
 
-    fn cached_bytes(&mut self, path: &Path) -> Result<Arc<[u8]>> {
-        if let Some(b) = self.cache.get(path) {
-            return Ok(b.clone());
+    async fn cached_buffer(&mut self, path: &Path) -> Result<Arc<SamplesBuffer>> {
+        if let Some(buf) = self.decoded.get(path) {
+            return Ok(buf.clone());
         }
-        let bytes = std::fs::read(path)?;
-        let arc: Arc<[u8]> = Arc::from(bytes);
-        self.cache.insert(path.to_path_buf(), arc.clone());
+        let bytes = afs::read(path).await?;
+        let buffer = decode_bytes(bytes)?;
+        let arc = Arc::new(buffer);
+        self.decoded.insert(path.to_path_buf(), arc.clone());
         Ok(arc)
-    }
-
-    fn play_file(&mut self, path: &Path) -> Result<()> {
-        let bytes = self.cached_bytes(path)?;
-        let cursor = std::io::Cursor::new(bytes);
-        let sink = rodio::play(self.stream.mixer(), cursor)?;
-        self.sinks.push(sink);
-        Ok(())
-    }
-
-    fn cleanup(&mut self) {
-        self.sinks.retain(|s| !s.empty());
     }
 }
 
-/// 异步音频播放循环
+/// 异步音频循环：预加载与播放
 ///
-/// - 从 `rx` 读取待播放的文件路径
-/// - 执行播放并清理已完成的 `Sink`
-pub async fn run_audio_loop(mut rx: mpsc::Receiver<PathBuf>) {
+/// - 从 `rx` 接收预加载或播放请求
+/// - 预加载期间每秒输出一次 `已加载/总数`
+/// - 完成后向 `ready_tx` 发送 `PreloadFinished`
+pub async fn run_audio_loop(mut rx: mpsc::Receiver<AudioMsg>, ready_tx: mpsc::Sender<AudioEvent>) {
     let mut audio = match Audio::new() {
         Ok(a) => a,
         Err(_) => return,
     };
-    while let Some(path) = rx.recv().await {
-        let _ = audio.play_file(&path);
-        audio.cleanup();
+    while let Some(msg) = rx.recv().await {
+        match msg {
+            AudioMsg::PreloadAll { files } => {
+                let total = files.len() as u32;
+                let loaded = Arc::new(AtomicU32::new(0));
+                let done = Arc::new(AtomicBool::new(false));
+                let loaded_for_log = loaded.clone();
+                let done_for_log = done.clone();
+                let logger = tokio::spawn(async move {
+                    let mut ticker = tokio::time::interval(Duration::from_secs(1));
+                    loop {
+                        ticker.tick().await;
+                        let c = loaded_for_log.load(Ordering::Relaxed);
+                        println!("音频预加载进度：{}/{}", c, total);
+                        if done_for_log.load(Ordering::Relaxed) {
+                            break;
+                        }
+                    }
+                });
+                let mut handles = Vec::with_capacity(files.len());
+                for path in files {
+                    let loaded_cl = loaded.clone();
+                    handles.push(tokio::spawn(async move {
+                        let bytes = match afs::read(&path).await {
+                            Ok(b) => b,
+                            Err(_) => {
+                                loaded_cl.fetch_add(1, Ordering::Relaxed);
+                                return (path, None);
+                            }
+                        };
+                        let buffer = match decode_bytes(bytes) {
+                            Ok(b) => b,
+                            Err(_) => {
+                                loaded_cl.fetch_add(1, Ordering::Relaxed);
+                                return (path, None);
+                            }
+                        };
+                        loaded_cl.fetch_add(1, Ordering::Relaxed);
+                        (path, Some(Arc::new(buffer)))
+                    }));
+                }
+                for h in handles {
+                    if let Ok((p, Some(buf))) = h.await {
+                        audio.decoded.insert(p, buf);
+                    }
+                }
+                done.store(true, Ordering::Relaxed);
+                let _ = logger.await;
+                let _ = ready_tx.try_send(AudioEvent::PreloadFinished);
+                println!("音频预加载完成");
+            }
+            AudioMsg::Play(path) => {
+                if let Ok(buf) = audio.cached_buffer(&path).await {
+                    audio.stream.mixer().add((*buf).clone());
+                }
+            }
+        }
     }
 }
