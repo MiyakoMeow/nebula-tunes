@@ -88,9 +88,20 @@ pub async fn run_main_loop(
             let sec = (elapsed.as_nanos().max(0) as u64) / 1_000_000_000;
             if sec != last_log_sec {
                 let visible = p.visible_events().count();
+                let mut min_r: f32 = 1.0;
+                let mut max_r: f32 = 0.0;
+                for (_, r) in p.visible_events() {
+                    let rf = r.as_f64() as f32;
+                    if rf < min_r {
+                        min_r = rf;
+                    }
+                    if rf > max_r {
+                        max_r = rf;
+                    }
+                }
                 println!(
-                    "elapsed={}s visible={} audio={}",
-                    sec, visible, audio_plays_this_sec
+                    "elapsed={}s visible={} ratio=[{:.2},{:.2}] audio={}",
+                    sec, visible, min_r, max_r, audio_plays_this_sec
                 );
                 audio_plays_this_sec = 0;
                 last_log_sec = sec;

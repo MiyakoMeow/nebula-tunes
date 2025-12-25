@@ -105,7 +105,7 @@ impl Renderer {
             format,
             width: size.width,
             height: size.height,
-            present_mode: wgpu::PresentMode::Fifo,
+            present_mode: wgpu::PresentMode::FifoRelaxed,
             alpha_mode: wgpu::CompositeAlphaMode::Opaque,
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
@@ -356,7 +356,8 @@ pub fn build_instances_for_processor(p: &mut BmsProcessor) -> Vec<Instance> {
                 continue;
             };
             let x = lane_x(idx);
-            let y = -VISIBLE_HEIGHT / 2.0 + ratio.as_f64() as f32 * VISIBLE_HEIGHT;
+            let r = (ratio.as_f64() as f32).clamp(0.0, 1.0);
+            let y = -VISIBLE_HEIGHT / 2.0 + r * VISIBLE_HEIGHT;
             instances.push(Instance {
                 pos: [x, y],
                 size: [LANE_WIDTH - 4.0, NOTE_HEIGHT],
