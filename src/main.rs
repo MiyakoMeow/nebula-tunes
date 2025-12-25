@@ -14,11 +14,14 @@ use std::{collections::HashMap, path::Path, path::PathBuf, time::Duration};
 
 use anyhow::Result;
 use async_fs as afs;
+use bms_rs::chart_process::types::PlayheadEvent;
 use bms_rs::{bms::prelude::*, chart_process::prelude::*};
 use bytemuck::{Pod, Zeroable};
 use chardetng::EncodingDetector;
 use clap::Parser;
 use gametime::{TimeSpan, TimeStamp};
+use rodio::{Sink, stream::OutputStream};
+use std::sync::Arc;
 use wgpu::util::DeviceExt;
 use winit::{
     application::ApplicationHandler, dpi::LogicalSize, event::WindowEvent,
@@ -316,15 +319,91 @@ impl Renderer {
     }
 }
 
+struct Audio {
+    stream: OutputStream,
+    sinks: Vec<Sink>,
+    cache: HashMap<PathBuf, Arc<[u8]>>,
+}
+
+impl Audio {
+    fn new() -> Result<Self> {
+        let stream = rodio::OutputStreamBuilder::open_default_stream()?;
+        Ok(Self {
+            stream,
+            sinks: Vec::new(),
+            cache: HashMap::new(),
+        })
+    }
+
+    fn cached_bytes(&mut self, path: &Path) -> Result<Arc<[u8]>> {
+        if let Some(b) = self.cache.get(path) {
+            return Ok(b.clone());
+        }
+        let bytes = std::fs::read(path)?;
+        let arc: Arc<[u8]> = Arc::from(bytes);
+        self.cache.insert(path.to_path_buf(), arc.clone());
+        Ok(arc)
+    }
+
+    fn play_file(&mut self, path: &Path) -> Result<()> {
+        let bytes = self.cached_bytes(path)?;
+        let cursor = std::io::Cursor::new(bytes);
+        let sink = rodio::play(self.stream.mixer(), cursor)?;
+        self.sinks.push(sink);
+        Ok(())
+    }
+
+    fn cleanup(&mut self) {
+        self.sinks.retain(|s| !s.empty());
+    }
+}
+
 struct App {
     renderer: Renderer,
     processor: Option<BmsProcessor>,
-    _audio_paths: HashMap<WavId, PathBuf>,
+    audio_paths: HashMap<WavId, PathBuf>,
     last_log_sec: u64,
     audio_plays_this_sec: u32,
+    audio: Option<Audio>,
 }
 
 impl App {
+    fn handle_audio_events(&mut self, events: &[PlayheadEvent], _now: TimeStamp) {
+        let Some(p) = self.processor.as_ref() else {
+            return;
+        };
+        let Some(_start) = p.started_at() else { return };
+        let Some(audio) = self.audio.as_mut() else {
+            return;
+        };
+        for ev in events {
+            if let ChartEvent::Note {
+                side, key, wav_id, ..
+            } = ev.event()
+            {
+                if *side != PlayerSide::Player1 {
+                    continue;
+                }
+                let Some(_idx) = key_to_lane(*key) else {
+                    continue;
+                };
+                if let Some(wav_id) = wav_id.as_ref()
+                    && let Some(path) = self.audio_paths.get(wav_id)
+                    && audio.play_file(path).is_ok()
+                {
+                    self.audio_plays_this_sec = self.audio_plays_this_sec.saturating_add(1);
+                }
+            }
+            if let ChartEvent::Bgm { wav_id } = ev.event()
+                && let Some(wav_id) = wav_id.as_ref()
+                && let Some(path) = self.audio_paths.get(wav_id)
+                && audio.play_file(path).is_ok()
+            {
+                self.audio_plays_this_sec = self.audio_plays_this_sec.saturating_add(1);
+            }
+        }
+    }
+
     fn start_if_ready(&mut self, now: TimeStamp) {
         if let Some(p) = &mut self.processor
             && p.started_at().is_none()
@@ -475,9 +554,10 @@ fn main() -> Result<()> {
             self.app = Some(App {
                 renderer,
                 processor: self.pre_processor.take(),
-                _audio_paths: std::mem::take(&mut self.pre_audio_paths),
+                audio_paths: std::mem::take(&mut self.pre_audio_paths),
                 last_log_sec: 0,
                 audio_plays_this_sec: 0,
+                audio: Audio::new().ok(),
             });
         }
         fn window_event(
@@ -501,11 +581,15 @@ fn main() -> Result<()> {
                     if let Some(app) = self.app.as_mut() {
                         app.start_if_ready(now);
                         if let Some(p) = app.processor.as_mut() {
-                            let _ = p.update(now);
+                            let events: Vec<_> = p.update(now).collect();
+                            app.handle_audio_events(&events, now);
                         }
                         let instances = app.build_instances();
                         let _ = app.renderer.draw(&instances);
                         app.log_tick(now);
+                        if let Some(a) = app.audio.as_mut() {
+                            a.cleanup();
+                        }
                     }
                 }
                 _ => {}
