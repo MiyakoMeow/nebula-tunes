@@ -28,6 +28,8 @@ use winit::{
     event_loop::ActiveEventLoop, event_loop::EventLoop, window::WindowId,
 };
 
+use tokio::sync::mpsc;
+
 #[derive(Parser)]
 struct ExecArgs {
     #[arg(long)]
@@ -360,114 +362,135 @@ impl Audio {
 
 struct App {
     renderer: Renderer,
-    processor: Option<BmsProcessor>,
-    audio_paths: HashMap<WavId, PathBuf>,
-    last_log_sec: u64,
-    audio_plays_this_sec: u32,
-    audio: Option<Audio>,
+    visual_rx: mpsc::Receiver<Vec<Instance>>,
+    latest_instances: Vec<Instance>,
 }
 
-impl App {
-    fn handle_audio_events(&mut self, events: &[PlayheadEvent], _now: TimeStamp) {
-        let Some(p) = self.processor.as_ref() else {
-            return;
-        };
-        let Some(_start) = p.started_at() else { return };
-        let Some(audio) = self.audio.as_mut() else {
-            return;
-        };
-        for ev in events {
-            if let ChartEvent::Note {
-                side, key, wav_id, ..
-            } = ev.event()
-            {
-                if *side != PlayerSide::Player1 {
-                    continue;
-                }
-                let Some(_idx) = key_to_lane(*key) else {
-                    continue;
-                };
-                if let Some(wav_id) = wav_id.as_ref()
-                    && let Some(path) = self.audio_paths.get(wav_id)
-                    && audio.play_file(path).is_ok()
-                {
-                    self.audio_plays_this_sec = self.audio_plays_this_sec.saturating_add(1);
-                }
-            }
-            if let ChartEvent::Bgm { wav_id } = ev.event()
-                && let Some(wav_id) = wav_id.as_ref()
-                && let Some(path) = self.audio_paths.get(wav_id)
-                && audio.play_file(path).is_ok()
-            {
-                self.audio_plays_this_sec = self.audio_plays_this_sec.saturating_add(1);
-            }
-        }
-    }
+enum ControlMsg {
+    Start,
+}
 
-    fn start_if_ready(&mut self, now: TimeStamp) {
-        if let Some(p) = &mut self.processor
-            && p.started_at().is_none()
-        {
-            p.start_play(now);
-            self.last_log_sec = 0;
-            self.audio_plays_this_sec = 0;
-        }
+fn base_instances() -> Vec<Instance> {
+    let mut instances: Vec<Instance> = Vec::with_capacity(1024);
+    for i in 0..LANE_COUNT {
+        instances.push(Instance {
+            pos: [lane_x(i), 0.0],
+            size: [LANE_WIDTH, VISIBLE_HEIGHT],
+            color: [0.15, 0.15, 0.18, 1.0],
+        });
     }
+    instances.push(Instance {
+        pos: [0.0, -VISIBLE_HEIGHT / 2.0 + 2.0],
+        size: [total_width(), 4.0],
+        color: [0.9, 0.9, 0.9, 1.0],
+    });
+    instances
+}
 
-    fn build_instances(&mut self) -> Vec<Instance> {
-        let mut instances: Vec<Instance> = Vec::with_capacity(1024);
-        for i in 0..LANE_COUNT {
+fn build_instances_for_processor(p: &mut BmsProcessor) -> Vec<Instance> {
+    let mut instances = base_instances();
+    if p.started_at().is_some() {
+        for (ev, ratio) in p.visible_events() {
+            let ChartEvent::Note { side, key, .. } = ev.event() else {
+                continue;
+            };
+            if *side != PlayerSide::Player1 {
+                continue;
+            }
+            let Some(idx) = key_to_lane(*key) else {
+                continue;
+            };
+            let x = lane_x(idx);
+            let y = -VISIBLE_HEIGHT / 2.0 + ratio.as_f64() as f32 * VISIBLE_HEIGHT;
             instances.push(Instance {
-                pos: [lane_x(i), 0.0],
-                size: [LANE_WIDTH, VISIBLE_HEIGHT],
-                color: [0.15, 0.15, 0.18, 1.0],
+                pos: [x, y],
+                size: [LANE_WIDTH - 4.0, NOTE_HEIGHT],
+                color: [0.3, 0.7, 1.0, 1.0],
             });
         }
-        instances.push(Instance {
-            pos: [0.0, -VISIBLE_HEIGHT / 2.0 + 2.0],
-            size: [total_width(), 4.0],
-            color: [0.9, 0.9, 0.9, 1.0],
-        });
-        if let Some(p) = self.processor.as_mut()
-            && p.started_at().is_some()
-        {
-            for (ev, ratio) in p.visible_events() {
-                let ChartEvent::Note { side, key, .. } = ev.event() else {
-                    continue;
-                };
-                if *side != PlayerSide::Player1 {
-                    continue;
-                }
-                let Some(idx) = key_to_lane(*key) else {
-                    continue;
-                };
-                let x = lane_x(idx);
-                let y = -VISIBLE_HEIGHT / 2.0 + ratio.as_f64() as f32 * VISIBLE_HEIGHT;
-                instances.push(Instance {
-                    pos: [x, y],
-                    size: [LANE_WIDTH - 4.0, NOTE_HEIGHT],
-                    color: [0.3, 0.7, 1.0, 1.0],
-                });
-            }
-        }
-        instances
     }
+    instances
+}
 
-    fn log_tick(&mut self, now: TimeStamp) {
-        let Some(p) = self.processor.as_mut() else {
-            return;
-        };
-        let Some(start) = p.started_at() else { return };
-        let elapsed = now.checked_elapsed_since(start).unwrap_or(TimeSpan::ZERO);
-        let sec = (elapsed.as_nanos().max(0) as u64) / 1_000_000_000;
-        if sec != self.last_log_sec {
-            let visible = p.visible_events().count();
-            println!(
-                "elapsed={}s visible={} audio={}",
-                sec, visible, self.audio_plays_this_sec
-            );
-            self.audio_plays_this_sec = 0;
-            self.last_log_sec = sec;
+async fn run_audio_loop(mut rx: mpsc::Receiver<PathBuf>) {
+    let mut audio = match Audio::new() {
+        Ok(a) => a,
+        Err(_) => return,
+    };
+    while let Some(path) = rx.recv().await {
+        let _ = audio.play_file(&path);
+        audio.cleanup();
+    }
+}
+
+async fn run_main_loop(
+    mut processor: Option<BmsProcessor>,
+    audio_paths: HashMap<WavId, PathBuf>,
+    mut control_rx: mpsc::Receiver<ControlMsg>,
+    visual_tx: mpsc::Sender<Vec<Instance>>,
+    audio_tx: mpsc::Sender<PathBuf>,
+) {
+    loop {
+        match control_rx.recv().await {
+            Some(ControlMsg::Start) => break,
+            None => return,
+        }
+    }
+    if let Some(p) = processor.as_mut() {
+        p.start_play(TimeStamp::now());
+    }
+    let mut last_log_sec: u64 = 0;
+    let mut audio_plays_this_sec: u32 = 0;
+    let mut ticker = tokio::time::interval(Duration::from_millis(16));
+    loop {
+        ticker.tick().await;
+        let now = TimeStamp::now();
+        if let Some(p) = processor.as_mut() {
+            let events: Vec<PlayheadEvent> = p.update(now).collect();
+            for ev in &events {
+                if let ChartEvent::Note {
+                    side, key, wav_id, ..
+                } = ev.event()
+                {
+                    if *side != PlayerSide::Player1 {
+                        continue;
+                    }
+                    let Some(_idx) = key_to_lane(*key) else {
+                        continue;
+                    };
+                    if let Some(wav_id) = wav_id.as_ref()
+                        && let Some(path) = audio_paths.get(wav_id)
+                        && audio_tx.try_send(path.clone()).is_ok()
+                    {
+                        audio_plays_this_sec = audio_plays_this_sec.saturating_add(1);
+                    }
+                }
+                if let ChartEvent::Bgm { wav_id } = ev.event()
+                    && let Some(wav_id) = wav_id.as_ref()
+                    && let Some(path) = audio_paths.get(wav_id)
+                    && audio_tx.try_send(path.clone()).is_ok()
+                {
+                    audio_plays_this_sec = audio_plays_this_sec.saturating_add(1);
+                }
+            }
+            let instances = build_instances_for_processor(p);
+            let _ = visual_tx.try_send(instances);
+            let Some(start) = p.started_at() else {
+                continue;
+            };
+            let elapsed = now.checked_elapsed_since(start).unwrap_or(TimeSpan::ZERO);
+            let sec = (elapsed.as_nanos().max(0) as u64) / 1_000_000_000;
+            if sec != last_log_sec {
+                let visible = p.visible_events().count();
+                println!(
+                    "elapsed={}s visible={} audio={}",
+                    sec, visible, audio_plays_this_sec
+                );
+                audio_plays_this_sec = 0;
+                last_log_sec = sec;
+            }
+        } else {
+            let _ = visual_tx.try_send(base_instances());
         }
     }
 }
@@ -521,19 +544,31 @@ async fn load_bms_and_collect_paths(
     Ok((processor, audio_paths))
 }
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let args = ExecArgs::parse();
     let event_loop = EventLoop::new()?;
     let (pre_processor, pre_audio_paths) = if let Some(bms_path) = args.bms_path {
-        let (p, ap) = pollster::block_on(load_bms_and_collect_paths(bms_path))?;
+        let (p, ap) = load_bms_and_collect_paths(bms_path).await?;
         (Some(p), ap)
     } else {
         (None, HashMap::new())
     };
+    let (control_tx, control_rx) = mpsc::channel::<ControlMsg>(1);
+    let (visual_tx, visual_rx) = mpsc::channel::<Vec<Instance>>(2);
+    let (audio_tx, audio_rx) = mpsc::channel::<PathBuf>(64);
+    let _audio_handle = tokio::spawn(run_audio_loop(audio_rx));
+    let _main_handle = tokio::spawn(run_main_loop(
+        pre_processor,
+        pre_audio_paths,
+        control_rx,
+        visual_tx,
+        audio_tx,
+    ));
     struct Handler {
         app: Option<App>,
-        pre_processor: Option<BmsProcessor>,
-        pre_audio_paths: HashMap<WavId, PathBuf>,
+        visual_rx: Option<mpsc::Receiver<Vec<Instance>>>,
+        control_tx: mpsc::Sender<ControlMsg>,
     }
     impl ApplicationHandler for Handler {
         fn resumed(&mut self, event_loop: &ActiveEventLoop) {
@@ -551,14 +586,16 @@ fn main() -> Result<()> {
                 Ok(r) => r,
                 Err(_) => return,
             };
+            let rx = match self.visual_rx.take() {
+                Some(r) => r,
+                None => return,
+            };
             self.app = Some(App {
                 renderer,
-                processor: self.pre_processor.take(),
-                audio_paths: std::mem::take(&mut self.pre_audio_paths),
-                last_log_sec: 0,
-                audio_plays_this_sec: 0,
-                audio: Audio::new().ok(),
+                visual_rx: rx,
+                latest_instances: base_instances(),
             });
+            let _ = self.control_tx.try_send(ControlMsg::Start);
         }
         fn window_event(
             &mut self,
@@ -577,19 +614,17 @@ fn main() -> Result<()> {
                     }
                 }
                 WindowEvent::RedrawRequested => {
-                    let now = TimeStamp::now();
                     if let Some(app) = self.app.as_mut() {
-                        app.start_if_ready(now);
-                        if let Some(p) = app.processor.as_mut() {
-                            let events: Vec<_> = p.update(now).collect();
-                            app.handle_audio_events(&events, now);
+                        loop {
+                            match app.visual_rx.try_recv() {
+                                Ok(instances) => {
+                                    app.latest_instances = instances;
+                                }
+                                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
+                                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => break,
+                            }
                         }
-                        let instances = app.build_instances();
-                        let _ = app.renderer.draw(&instances);
-                        app.log_tick(now);
-                        if let Some(a) = app.audio.as_mut() {
-                            a.cleanup();
-                        }
+                        let _ = app.renderer.draw(&app.latest_instances);
                     }
                 }
                 _ => {}
@@ -603,8 +638,8 @@ fn main() -> Result<()> {
     }
     let mut handler = Handler {
         app: None,
-        pre_processor,
-        pre_audio_paths,
+        visual_rx: Some(visual_rx),
+        control_tx,
     };
     event_loop.run_app(&mut handler)?;
     Ok(())
