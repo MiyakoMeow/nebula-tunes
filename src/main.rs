@@ -335,7 +335,7 @@ impl App {
         }
     }
 
-    fn build_instances(&mut self, now: TimeStamp) -> Vec<Instance> {
+    fn build_instances(&mut self) -> Vec<Instance> {
         let mut instances: Vec<Instance> = Vec::with_capacity(1024);
         for i in 0..LANE_COUNT {
             instances.push(Instance {
@@ -352,7 +352,7 @@ impl App {
         if let Some(p) = self.processor.as_mut()
             && p.started_at().is_some()
         {
-            for ev in p.visible_events(now) {
+            for (ev, ratio) in p.visible_events() {
                 let ChartEvent::Note { side, key, .. } = ev.event() else {
                     continue;
                 };
@@ -363,7 +363,7 @@ impl App {
                     continue;
                 };
                 let x = lane_x(idx);
-                let y = -VISIBLE_HEIGHT / 2.0 + ev.display_ratio().as_f64() as f32 * VISIBLE_HEIGHT;
+                let y = -VISIBLE_HEIGHT / 2.0 + ratio.as_f64() as f32 * VISIBLE_HEIGHT;
                 instances.push(Instance {
                     pos: [x, y],
                     size: [LANE_WIDTH - 4.0, NOTE_HEIGHT],
@@ -382,7 +382,7 @@ impl App {
         let elapsed = now.checked_elapsed_since(start).unwrap_or(TimeSpan::ZERO);
         let sec = (elapsed.as_nanos().max(0) as u64) / 1_000_000_000;
         if sec != self.last_log_sec {
-            let visible = p.visible_events(now).count();
+            let visible = p.visible_events().count();
             println!(
                 "elapsed={}s visible={} audio={}",
                 sec, visible, self.audio_plays_this_sec
@@ -503,7 +503,7 @@ fn main() -> Result<()> {
                         if let Some(p) = app.processor.as_mut() {
                             let _ = p.update(now);
                         }
-                        let instances = app.build_instances(now);
+                        let instances = app.build_instances();
                         let _ = app.renderer.draw(&instances);
                         app.log_tick(now);
                     }

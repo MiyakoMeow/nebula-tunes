@@ -288,7 +288,7 @@ dependencies = [
 [[package]]
 name = "bms-rs"
 version = "0.10.1"
-source = "git+https://github.com/MikuroXina/bms-rs#cabde97b9ebc14932d43446c3d5a11d6e5ff2d9b"
+source = "git+https://github.com/MikuroXina/bms-rs#180c66a439477932ef8d732ce6b3aa4012f4a52e"
 dependencies = [
  "ariadne",
  "chumsky",
@@ -1405,9 +1405,9 @@ dependencies = [
 
 [[package]]
 name = "ordered-float"
-version = "5.0.0"
+version = "5.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e2c1f9f56e534ac6a9b8a4600bdf0f530fb393b5f393e7b4d03489c3cf0c3f01"
+checksum = "7f4779c6901a562440c3786d08192c6fbda7c1c2060edd10006b05ee35d10f2d"
 dependencies = [
  "num-traits",
 ]
@@ -2809,6 +2809,6 @@ dependencies = [
 
 [[package]]
 name = "zmij"
-version = "0.1.7"
+version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e404bcd8afdaf006e529269d3e85a743f9480c3cef60034d77860d02964f3ba"
+checksum = "f1dccf46b25b205e4bebe1d5258a991df1cc17801017a845cb5b3fe0269781aa"
