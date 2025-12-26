@@ -2,6 +2,13 @@
 name = "nebula-tunes"
 version = "0.1.0"
 edition = "2024"
+license = "AGPLv3"
+description = "BMS (Be-Music Source) difficulty table parser & fetcher"
+authors = ["MiyakoMeow"]
+repository = "https://github.com/MiyakoMeow/nebula-tunes"
+documentation = "https://docs.rs/nebula-tunes"
+categories = ["games"]
+keywords = ["bms"]
 
 [dependencies]
 anyhow = "1"
