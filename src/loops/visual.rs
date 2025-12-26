@@ -400,7 +400,7 @@ impl ApplicationHandler for Handler {
             Ok(w) => w,
             Err(_) => return,
         };
-        let renderer = match pollster::block_on(Renderer::new(window)) {
+        let renderer = match futures_lite::future::block_on(Renderer::new(window)) {
             Ok(r) => r,
             Err(_) => return,
         };
