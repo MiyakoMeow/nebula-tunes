@@ -18,7 +18,7 @@ use gametime::TimeSpan;
 use tokio::sync::mpsc;
 use winit::event_loop::EventLoop;
 
-use crate::config::load_sys_config;
+use crate::config::load_sys;
 use crate::loops::{InputMsg, VisualMsg, audio, main_loop, visual};
 
 #[derive(Parser)]
@@ -127,7 +127,7 @@ async fn load_bms_and_collect_paths(
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let sys = load_sys_config(Path::new("config_sys.toml"))?;
+    let sys = load_sys(Path::new("config_sys.toml"))?;
     let args = ExecArgs::parse();
     let event_loop = EventLoop::new()?;
     let (pre_processor, pre_audio_paths, pre_bmp_paths) = if let Some(bms_path) = args.bms_path {

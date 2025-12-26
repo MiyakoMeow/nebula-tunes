@@ -5,27 +5,30 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1"
-encoding_rs = "0.8"
-chardetng = "0.1"
-futures-lite = "2"
-async-fs = "2"
-clap = { version = "4", features = ["derive"] }
+bms-rs = { git = "https://github.com/MikuroXina/bms-rs" }
 gametime = { version = "0.7", features = ["global_reference"] }
-wgpu = { version = "28", default-features = false, features = [
-    "wgsl",
-    "vulkan",
-] }
-winit = { version = "0.30", features = ["serde"] }
-pollster = "0.4"
-bytemuck = "1"
-rodio = "0.21"
-tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 toml = "0.9"
-image = "0.25"
+winit = { version = "0.30", features = ["serde"] }
 
-[dependencies.bms-rs]
-git = "https://github.com/MikuroXina/bms-rs"
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.3", features = ["wasm_js"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+async-fs = "2"
+bytemuck = "1"
+chardetng = "0.1"
+clap = { version = "4", features = ["derive"] }
+encoding_rs = "0.8"
+futures-lite = "2"
+image = "0.25"
+pollster = "0.4"
+rodio = "0.21"
+tokio = { version = "1", features = ["full"] }
+wgpu = { version = "28", default-features = false, features = [
+  "wgsl",
+  "vulkan",
+] }
 
 # Enable a small amount of optimization in the dev profile.
 [profile.dev]

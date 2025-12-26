@@ -1,3 +1,5 @@
+//! 系统配置定义与解析
+
 use std::path::Path;
 use std::time::Duration;
 
@@ -7,23 +9,23 @@ use winit::keyboard::KeyCode;
 
 /// 系统运行时配置
 #[derive(Deserialize, Clone)]
-pub struct SysConfig {
+pub struct Sys {
     /// 键位映射配置
-    pub keys: KeysConfig,
+    pub keys: Keys,
     /// 判定与可见区域配置
-    pub judge: JudgeConfig,
+    pub judge: Judge,
 }
 
 /// 键位配置
 #[derive(Deserialize, Clone)]
-pub struct KeysConfig {
+pub struct Keys {
     /// 8 轨对应的按键代码列表
     pub lanes: Vec<KeyCode>,
 }
 
 /// 判定配置
 #[derive(Deserialize, Clone)]
-pub struct JudgeConfig {
+pub struct Judge {
     #[serde(rename = "visible_travel_ms", deserialize_with = "de_timespan_ms")]
     /// 可见区域的时间跨度（毫秒）
     pub visible_travel: gametime::TimeSpan,
@@ -64,8 +66,9 @@ impl JudgePreset for StandardPreset {
     }
 }
 
-impl JudgeConfig {
+impl Judge {
     /// 根据预设名称创建判定窗配置实现
+    #[must_use]
     pub fn preset_impl(&self) -> Box<dyn JudgePreset> {
         match self.preset.as_str() {
             "LR2" => Box::new(LR2Preset),
@@ -74,16 +77,44 @@ impl JudgeConfig {
         }
     }
     /// 获取四档判定时间窗口
+    #[must_use]
     pub fn windows(&self) -> [gametime::TimeSpan; 4] {
         self.preset_impl().windows()
     }
 }
 
-/// 从指定路径加载系统配置（TOML）
-pub fn load_sys_config(path: &Path) -> Result<SysConfig> {
-    let s = std::fs::read_to_string(path)?;
-    let cfg: SysConfig = toml::from_str(&s)?;
+/// 从 TOML 字符串解析系统配置
+///
+/// # Errors
+///
+/// - TOML 解析失败
+/// - 配置字段反序列化失败
+pub fn parse_sys_str(s: &str) -> Result<Sys> {
+    let cfg: Sys = toml::from_str(s)?;
     Ok(cfg)
+}
+
+/// 从指定路径加载系统配置（TOML）
+///
+/// # Errors
+///
+/// - 读取文件失败
+/// - TOML 解析失败
+/// - 配置字段反序列化失败
+#[cfg(not(target_arch = "wasm32"))]
+pub fn load_sys(path: &Path) -> Result<Sys> {
+    let s = std::fs::read_to_string(path)?;
+    parse_sys_str(&s)
+}
+
+/// 从指定路径加载系统配置（TOML）
+///
+/// # Errors
+///
+/// - WASM 目标不支持直接读取本地文件
+#[cfg(target_arch = "wasm32")]
+pub fn load_sys(_path: &Path) -> Result<Sys> {
+    anyhow::bail!("load_sys is not available on wasm")
 }
 
 /// 反序列化毫秒为 `TimeSpan`
