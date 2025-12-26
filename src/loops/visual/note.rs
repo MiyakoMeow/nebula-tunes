@@ -30,7 +30,10 @@ pub fn base_instances() -> Vec<Instance> {
         });
     }
     instances.push(Instance {
-        pos: [0.0, -super::VISIBLE_HEIGHT / 2.0 + 2.0],
+        pos: [
+            -((super::RIGHT_PANEL_GAP + super::VISIBLE_HEIGHT) / 2.0),
+            -super::VISIBLE_HEIGHT / 2.0 + 2.0,
+        ],
         size: [super::total_width(), 4.0],
         color: [0.9, 0.9, 0.9, 1.0],
     });
@@ -76,12 +79,19 @@ pub fn build_instances_for_processor_with_state(
     let gw = super::total_width();
     let gy = super::VISIBLE_HEIGHT / 2.0 - 20.0;
     instances.push(Instance {
-        pos: [0.0, gy],
+        pos: [
+            -((super::RIGHT_PANEL_GAP + super::VISIBLE_HEIGHT) / 2.0),
+            gy,
+        ],
         size: [gw, 8.0],
         color: [0.3, 0.3, 0.35, 1.0],
     });
     instances.push(Instance {
-        pos: [-gw / 2.0 + (gw * gauge) / 2.0, gy],
+        pos: [
+            -((super::RIGHT_PANEL_GAP + super::VISIBLE_HEIGHT) / 2.0)
+                + (-gw / 2.0 + (gw * gauge) / 2.0),
+            gy,
+        ],
         size: [gw * gauge, 8.0],
         color: [0.2, 0.8, 0.4, 1.0],
     });

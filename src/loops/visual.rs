@@ -345,7 +345,8 @@ pub fn total_width() -> f32 {
 
 fn lane_x(idx: usize) -> f32 {
     let left = -total_width() / 2.0 + LANE_WIDTH / 2.0;
-    left + idx as f32 * (LANE_WIDTH + LANE_GAP)
+    let offset = (RIGHT_PANEL_GAP + VISIBLE_HEIGHT) / 2.0;
+    left + idx as f32 * (LANE_WIDTH + LANE_GAP) - offset
 }
 
 impl ApplicationHandler for Handler {

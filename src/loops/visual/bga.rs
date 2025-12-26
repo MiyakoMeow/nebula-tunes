@@ -189,7 +189,7 @@ impl BgaRenderer {
         let draw_w = iw * scale;
         let draw_h = ih * scale;
         let gw = super::total_width();
-        let center_x = gw / 2.0 + super::RIGHT_PANEL_GAP + side / 2.0;
+        let center_x = gw / 2.0 + super::RIGHT_PANEL_GAP / 2.0;
         let inst = crate::Instance {
             pos: [center_x, 0.0],
             size: [draw_w, draw_h],
