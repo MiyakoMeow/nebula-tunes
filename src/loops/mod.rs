@@ -9,6 +9,8 @@ pub mod audio;
 pub mod main_loop;
 pub mod visual;
 
+use std::path::PathBuf;
+
 /// 控制主循环启动的消息
 pub enum ControlMsg {
     Start,
@@ -18,4 +20,12 @@ pub enum ControlMsg {
 pub enum InputMsg {
     KeyDown(usize),
     KeyUp(usize),
+}
+
+/// 视觉循环消息
+pub enum VisualMsg {
+    /// 更新实例列表
+    Instances(Vec<crate::Instance>),
+    /// 切换BGA图片
+    Bga(PathBuf),
 }

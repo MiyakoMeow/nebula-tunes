@@ -25,7 +25,7 @@ use tokio::sync::mpsc;
 use winit::event_loop::EventLoop;
 
 use crate::config::load_sys_config;
-use crate::loops::{InputMsg, audio, main_loop, visual};
+use crate::loops::{InputMsg, VisualMsg, audio, main_loop, visual};
 
 #[derive(Parser)]
 struct ExecArgs {
@@ -56,7 +56,11 @@ pub struct Instance {
 async fn load_bms_and_collect_paths(
     bms_path: PathBuf,
     travel: TimeSpan,
-) -> Result<(BmsProcessor, HashMap<WavId, PathBuf>)> {
+) -> Result<(
+    BmsProcessor,
+    HashMap<WavId, PathBuf>,
+    HashMap<BmpId, PathBuf>,
+)> {
     let bms_bytes = afs::read(&bms_path).await?;
     let mut det = EncodingDetector::new();
     det.feed(&bms_bytes, true);
@@ -75,6 +79,7 @@ async fn load_bms_and_collect_paths(
         BmsProcessor::new::<KeyLayoutBeat>(&bms, VisibleRangePerBpm::new(&base_bpm, travel));
     let bms_dir = bms_path.parent().unwrap_or(Path::new(".")).to_path_buf();
     let mut audio_paths: HashMap<WavId, PathBuf> = HashMap::new();
+    let mut bmp_paths: HashMap<BmpId, PathBuf> = HashMap::new();
     let child_list: Vec<PathBuf> = processor
         .audio_files()
         .into_values()
@@ -95,7 +100,27 @@ async fn load_bms_and_collect_paths(
         let chosen = stem.and_then(|s| index.get(&s).cloned()).unwrap_or(base);
         audio_paths.insert(id, chosen);
     }
-    Ok((processor, audio_paths))
+    // 为BMP资源建立路径映射（不加载）
+    let bmp_list: Vec<PathBuf> = processor
+        .bmp_files()
+        .into_values()
+        .map(std::path::Path::to_path_buf)
+        .collect();
+    let bmp_index =
+        filesystem::choose_paths_by_ext_async(&bms_dir, &bmp_list, &["bmp", "jpg", "jpeg", "png"])
+            .await;
+    for (id, bmp_path) in processor.bmp_files().into_iter() {
+        let stem = bmp_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .map(std::string::ToString::to_string);
+        let base = bms_dir.join(bmp_path);
+        let chosen = stem
+            .and_then(|s| bmp_index.get(&s).cloned())
+            .unwrap_or(base);
+        bmp_paths.insert(id, chosen);
+    }
+    Ok((processor, audio_paths, bmp_paths))
 }
 
 #[tokio::main]
@@ -103,14 +128,14 @@ async fn main() -> Result<()> {
     let sys = load_sys_config(Path::new("config_sys.toml"))?;
     let args = ExecArgs::parse();
     let event_loop = EventLoop::new()?;
-    let (pre_processor, pre_audio_paths) = if let Some(bms_path) = args.bms_path {
-        let (p, ap) = load_bms_and_collect_paths(bms_path, sys.judge.visible_travel).await?;
-        (Some(p), ap)
+    let (pre_processor, pre_audio_paths, pre_bmp_paths) = if let Some(bms_path) = args.bms_path {
+        let (p, ap, bp) = load_bms_and_collect_paths(bms_path, sys.judge.visible_travel).await?;
+        (Some(p), ap, bp)
     } else {
-        (None, HashMap::new())
+        (None, HashMap::new(), HashMap::new())
     };
     let (control_tx, control_rx) = mpsc::channel::<loops::ControlMsg>(1);
-    let (visual_tx, visual_rx) = mpsc::channel::<Vec<Instance>>(2);
+    let (visual_tx, visual_rx) = mpsc::channel::<VisualMsg>(2);
     let (input_tx, input_rx) = mpsc::channel::<InputMsg>(64);
     let (audio_tx, audio_rx) = mpsc::channel::<audio::AudioMsg>(64);
     let (audio_event_tx, audio_event_rx) = mpsc::channel::<audio::AudioEvent>(1);
@@ -118,6 +143,7 @@ async fn main() -> Result<()> {
     let _main_handle = tokio::spawn(main_loop::run_main_loop(
         pre_processor,
         pre_audio_paths,
+        pre_bmp_paths,
         control_rx,
         visual_tx,
         input_rx,

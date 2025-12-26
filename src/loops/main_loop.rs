@@ -11,10 +11,9 @@ use bms_rs::chart_process::types::PlayheadEvent;
 use gametime::{TimeSpan, TimeStamp};
 use tokio::sync::mpsc;
 
-use crate::Instance;
 use crate::loops::audio::{AudioEvent, AudioMsg};
 use crate::loops::visual::{base_instances, build_instances_for_processor_with_state};
-use crate::loops::{ControlMsg, InputMsg};
+use crate::loops::{ControlMsg, InputMsg, VisualMsg};
 
 pub struct JudgeParams {
     pub travel: TimeSpan,
@@ -38,8 +37,9 @@ struct GameState {
 pub async fn run_main_loop(
     mut processor: Option<BmsProcessor>,
     audio_paths: HashMap<WavId, PathBuf>,
+    bmp_paths: HashMap<BmpId, PathBuf>,
     mut control_rx: mpsc::Receiver<ControlMsg>,
-    visual_tx: mpsc::Sender<Vec<Instance>>,
+    visual_tx: mpsc::Sender<VisualMsg>,
     mut input_rx: mpsc::Receiver<InputMsg>,
     judge: JudgeParams,
     audio_tx: mpsc::Sender<AudioMsg>,
@@ -71,7 +71,7 @@ pub async fn run_main_loop(
         ticker.tick().await;
         let now = TimeStamp::now();
         let Some(p) = processor.as_mut() else {
-            let _ = visual_tx.try_send(base_instances());
+            let _ = visual_tx.try_send(VisualMsg::Instances(base_instances()));
             continue;
         };
         loop {
@@ -186,6 +186,12 @@ pub async fn run_main_loop(
                     continue;
                 };
             }
+            if let ChartEvent::BgaChange { layer: _, bmp_id } = ev.event()
+                && let Some(bmp_id) = bmp_id.as_ref()
+                && let Some(path) = bmp_paths.get(bmp_id)
+            {
+                let _ = visual_tx.try_send(VisualMsg::Bga(path.clone()));
+            }
             if let ChartEvent::Bgm { wav_id } = ev.event()
                 && let Some(wav_id) = wav_id.as_ref()
                 && let Some(path) = audio_paths.get(wav_id)
@@ -195,7 +201,7 @@ pub async fn run_main_loop(
             }
         }
         let instances = build_instances_for_processor_with_state(p, &state.pressed, state.gauge);
-        let _ = visual_tx.try_send(instances);
+        let _ = visual_tx.try_send(VisualMsg::Instances(instances));
         let Some(start) = p.started_at() else {
             continue;
         };
