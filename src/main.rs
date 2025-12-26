@@ -146,13 +146,7 @@ async fn main() -> Result<()> {
     let (audio_tx, audio_rx) = mpsc::channel::<audio::Msg>(64);
     let (audio_event_tx, audio_event_rx) = mpsc::channel::<audio::Event>(1);
     let _audio_thread = thread::spawn(move || {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build();
-        let Ok(rt) = rt else {
-            return;
-        };
-        rt.block_on(audio::run_audio_loop(audio_rx, audio_event_tx));
+        audio::run_audio_loop(audio_rx, audio_event_tx);
     });
     let _main_handle = tokio::spawn(main_loop::run(
         pre_processor,
