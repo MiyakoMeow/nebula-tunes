@@ -358,6 +358,21 @@ pub fn build_instances_for_processor_with_state(
     pressed: &[bool; 8],
     gauge: f32,
 ) -> Vec<Instance> {
+    fn lane_color(idx: usize) -> [f32; 4] {
+        const RED: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
+        const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
+        const BLUE: [f32; 4] = [0.2, 0.6, 1.0, 1.0];
+        match idx % 8 {
+            0 => RED,
+            1 => WHITE,
+            2 => BLUE,
+            3 => WHITE,
+            4 => BLUE,
+            5 => WHITE,
+            6 => BLUE,
+            _ => WHITE,
+        }
+    }
     let mut instances = base_instances();
     if p.started_at().is_some() {
         for (ev, ratio) in p.visible_events() {
@@ -376,7 +391,7 @@ pub fn build_instances_for_processor_with_state(
             instances.push(Instance {
                 pos: [x, y],
                 size: [LANE_WIDTH - 4.0, NOTE_HEIGHT],
-                color: [0.3, 0.7, 1.0, 1.0],
+                color: lane_color(idx),
             });
         }
     }
