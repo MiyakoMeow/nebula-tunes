@@ -6,7 +6,11 @@ mod config;
 mod filesystem;
 mod loops;
 
-use std::{collections::HashMap, path::Path, path::PathBuf};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    thread,
+};
 
 use anyhow::Result;
 use async_fs as afs;
@@ -141,7 +145,15 @@ async fn main() -> Result<()> {
     let (input_tx, input_rx) = mpsc::channel::<InputMsg>(64);
     let (audio_tx, audio_rx) = mpsc::channel::<audio::Msg>(64);
     let (audio_event_tx, audio_event_rx) = mpsc::channel::<audio::Event>(1);
-    let _audio_handle = tokio::spawn(audio::run_audio_loop(audio_rx, audio_event_tx));
+    let _audio_thread = thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build();
+        let Ok(rt) = rt else {
+            return;
+        };
+        rt.block_on(audio::run_audio_loop(audio_rx, audio_event_tx));
+    });
     let _main_handle = tokio::spawn(main_loop::run(
         pre_processor,
         pre_audio_paths,
