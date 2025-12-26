@@ -1,8 +1,9 @@
 //! Nebula Tunes library target used for WASM compilation checks.
 
+#[cfg(not(target_os = "wasi"))]
 pub mod config;
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(target_os = "wasi")]
 /// WASM 构建冒烟检查入口
 ///
 /// # Errors

@@ -1,7 +1,4 @@
 [alias]
-check-wasm = "check --target wasm32-unknown-unknown --lib --all-features"
-clippy-wasm = "clippy --target wasm32-unknown-unknown --lib --all-features"
-build-wasm = "build --target wasm32-unknown-unknown --profile wasm-release --lib --all-features"
-
-[target.wasm32-unknown-unknown]
-rustflags = ["--cfg", "getrandom_backend=\"wasm_js\""]
+check-wasm = "check --target wasm32-wasip1 --lib --all-features"
+clippy-wasm = "clippy --target wasm32-wasip1 --lib --all-features"
+build-wasm = "build --target wasm32-wasip1 --profile wasm-release --lib --all-features"
