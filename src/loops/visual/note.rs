@@ -1,10 +1,15 @@
+//! 音符与轨道实例构建模块
+//!
+//! 提供基础轨道实例和根据谱面与状态生成的实例列表。
+
 use bms_rs::chart_process::ChartProcessor;
 use bms_rs::chart_process::prelude::*;
 
 use crate::Instance;
 use crate::key_to_lane;
 
-fn lane_color(idx: usize) -> [f32; 4] {
+/// 获取指定轨道的基础颜色
+const fn lane_color(idx: usize) -> [f32; 4] {
     const RED: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
     const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
     const BLUE: [f32; 4] = [0.2, 0.6, 1.0, 1.0];
@@ -20,6 +25,7 @@ fn lane_color(idx: usize) -> [f32; 4] {
     }
 }
 
+/// 构建基础轨道与面板实例
 pub fn base_instances() -> Vec<Instance> {
     let mut instances: Vec<Instance> = Vec::with_capacity(1024);
     for i in 0..super::LANE_COUNT {
@@ -40,9 +46,10 @@ pub fn base_instances() -> Vec<Instance> {
     instances
 }
 
+/// 根据处理器可见事件与当前状态构建实例列表
 pub fn build_instances_for_processor_with_state(
     p: &mut BmsProcessor,
-    pressed: &[bool; 8],
+    pressed: [bool; 8],
     gauge: f32,
 ) -> Vec<Instance> {
     let mut instances = base_instances();
@@ -67,8 +74,8 @@ pub fn build_instances_for_processor_with_state(
             });
         }
     }
-    for (i, pressed_flag) in pressed.iter().enumerate() {
-        if *pressed_flag {
+    for (i, pressed_flag) in pressed.into_iter().enumerate() {
+        if pressed_flag {
             instances.push(Instance {
                 pos: [super::lane_x(i), -super::VISIBLE_HEIGHT / 2.0 + 24.0],
                 size: [super::LANE_WIDTH - 8.0, 24.0],

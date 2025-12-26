@@ -5,29 +5,41 @@ use anyhow::Result;
 use serde::{Deserialize, Deserializer};
 use winit::keyboard::KeyCode;
 
+/// 系统运行时配置
 #[derive(Deserialize, Clone)]
 pub struct SysConfig {
+    /// 键位映射配置
     pub keys: KeysConfig,
+    /// 判定与可见区域配置
     pub judge: JudgeConfig,
 }
 
+/// 键位配置
 #[derive(Deserialize, Clone)]
 pub struct KeysConfig {
+    /// 8 轨对应的按键代码列表
     pub lanes: Vec<KeyCode>,
 }
 
+/// 判定配置
 #[derive(Deserialize, Clone)]
 pub struct JudgeConfig {
     #[serde(rename = "visible_travel_ms", deserialize_with = "de_timespan_ms")]
+    /// 可见区域的时间跨度（毫秒）
     pub visible_travel: gametime::TimeSpan,
+    /// 判定预设名（如 LR2、Standard）
     pub preset: String,
 }
 
+/// 判定预设接口
 pub trait JudgePreset {
+    /// 返回四档判定窗口
     fn windows(&self) -> [gametime::TimeSpan; 4];
 }
 
+/// LR2 判定预设
 pub struct LR2Preset;
+/// 标准判定预设
 pub struct StandardPreset;
 
 impl JudgePreset for LR2Preset {
@@ -53,6 +65,7 @@ impl JudgePreset for StandardPreset {
 }
 
 impl JudgeConfig {
+    /// 根据预设名称创建判定窗配置实现
     pub fn preset_impl(&self) -> Box<dyn JudgePreset> {
         match self.preset.as_str() {
             "LR2" => Box::new(LR2Preset),
@@ -60,17 +73,20 @@ impl JudgeConfig {
             _ => Box::new(LR2Preset),
         }
     }
+    /// 获取四档判定时间窗口
     pub fn windows(&self) -> [gametime::TimeSpan; 4] {
         self.preset_impl().windows()
     }
 }
 
+/// 从指定路径加载系统配置（TOML）
 pub fn load_sys_config(path: &Path) -> Result<SysConfig> {
     let s = std::fs::read_to_string(path)?;
     let cfg: SysConfig = toml::from_str(&s)?;
     Ok(cfg)
 }
 
+/// 反序列化毫秒为 `TimeSpan`
 fn de_timespan_ms<'de, D>(deserializer: D) -> Result<gametime::TimeSpan, D::Error>
 where
     D: Deserializer<'de>,

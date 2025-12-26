@@ -1,3 +1,9 @@
+//! 文件系统辅助工具
+//!
+//! - 异步读取目录并收集候选文件
+//! - 依据扩展名建立文件基名到路径的映射
+//! - 适配 BMS 资源在不同目录的实际文件名
+
 use std::{path::Path, path::PathBuf};
 
 use anyhow::Result;
@@ -5,6 +11,12 @@ use async_fs as afs;
 use futures_lite::{StreamExt, stream};
 use std::collections::{HashMap, HashSet};
 
+/// 在父目录及子目录中按扩展名查找文件，返回“文件基名->路径”的映射
+///
+/// - `parent`：父目录
+/// - `children`：子路径列表（仅用于确定可能的子目录）
+/// - `exts`：允许的扩展名集合（不区分大小写）
+/// - 若同名文件存在多个，仅保留首次发现的路径
 pub async fn choose_paths_by_ext_async(
     parent: &Path,
     children: &[PathBuf],

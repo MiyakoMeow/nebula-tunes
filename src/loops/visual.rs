@@ -4,7 +4,9 @@
 //! - 在 `RedrawRequested` 非阻塞接收最新帧并渲染
 //! - 在 `about_to_wait` 请求重绘以维持刷新
 
+/// BGA 渲染子模块
 mod bga;
+/// 音符与轨道实例构建
 mod note;
 pub use note::{base_instances, build_instances_for_processor_with_state};
 use std::collections::HashMap;
@@ -26,21 +28,30 @@ use winit::keyboard::{KeyCode, PhysicalKey};
 
 /// 视觉应用状态
 pub struct App {
+    /// 渲染器实例
     renderer: Renderer,
+    /// 视觉消息接收端
     visual_rx: mpsc::Receiver<VisualMsg>,
+    /// 最新一帧的实例列表
     latest_instances: Vec<Instance>,
 }
 
 /// 视觉事件处理器
 pub struct Handler {
+    /// 可选的视觉应用状态
     pub app: Option<App>,
+    /// 视觉消息接收端
     pub visual_rx: Option<mpsc::Receiver<VisualMsg>>,
+    /// 控制消息发送端
     pub control_tx: mpsc::Sender<ControlMsg>,
+    /// 输入消息发送端
     pub input_tx: mpsc::Sender<InputMsg>,
+    /// 键位到轨道索引映射
     key_map: HashMap<KeyCode, usize>,
 }
 
 impl Handler {
+    /// 创建视觉事件处理器并建立键位映射
     pub fn new(
         visual_rx: mpsc::Receiver<VisualMsg>,
         control_tx: mpsc::Sender<ControlMsg>,
@@ -63,29 +74,46 @@ impl Handler {
 
 #[repr(C)]
 #[derive(Clone, Copy, Zeroable, Pod)]
+/// 屏幕统一参数
 struct ScreenUniform {
+    /// 屏幕尺寸（宽, 高）
     size: [f32; 2],
 }
 
 /// 简易矩形渲染器，负责上传实例并绘制
 pub struct Renderer {
+    /// 渲染表面
     surface: wgpu::Surface<'static>,
+    /// 图形设备
     device: wgpu::Device,
+    /// 命令队列
     queue: wgpu::Queue,
+    /// 渲染表面配置
     config: wgpu::SurfaceConfiguration,
+    /// 渲染管线
     pipeline: wgpu::RenderPipeline,
+    /// 绑定组
     bind_group: wgpu::BindGroup,
+    /// 屏幕统一缓冲
     screen_buffer: wgpu::Buffer,
+    /// 四边形顶点缓冲
     quad_vb: wgpu::Buffer,
+    /// 索引缓冲
     idx_buf: wgpu::Buffer,
+    /// 实例缓冲
     instance_buf: wgpu::Buffer,
+    /// BGA 渲染器
     bga: bga::BgaRenderer,
+    /// 三角形索引数量
     index_count: u32,
+    /// 关联窗口
     pub(crate) window: winit::window::Window,
+    /// 逻辑屏幕尺寸
     logical_size: [f32; 2],
 }
 
 impl Renderer {
+    /// 创建渲染器并初始化管线、缓冲与资源
     async fn new(window: winit::window::Window) -> Result<Self> {
         let instance = wgpu::Instance::default();
         let surface = unsafe {
@@ -113,7 +141,12 @@ impl Renderer {
             })
             .await?;
         let size = window.inner_size();
-        let format = surface.get_capabilities(&adapter).formats[0];
+        let caps = surface.get_capabilities(&adapter);
+        let format = caps
+            .formats
+            .first()
+            .copied()
+            .unwrap_or(wgpu::TextureFormat::Bgra8Unorm);
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
@@ -320,6 +353,7 @@ impl Renderer {
         Ok(())
     }
 
+    /// 根据给定路径加载并更新 BGA 图片
     fn update_bga_image_from_path(&mut self, path: &std::path::Path) -> Result<()> {
         self.bga
             .update_image_from_path(&self.device, &self.queue, &self.screen_buffer, path)
@@ -332,9 +366,13 @@ pub const VISIBLE_HEIGHT: f32 = 600.0;
 /// 右侧BGA区域与轨道之间的间隔（像素）
 const RIGHT_PANEL_GAP: f32 = 16.0;
 
+/// 轨道数量
 const LANE_COUNT: usize = 8;
+/// 单个轨道宽度（像素）
 const LANE_WIDTH: f32 = 60.0;
+/// 轨道间距（像素）
 const LANE_GAP: f32 = 8.0;
+/// 音符高度（像素）
 const NOTE_HEIGHT: f32 = 12.0;
 
 /// 计算总宽度（含轨道与间隔）
@@ -343,6 +381,7 @@ pub fn total_width() -> f32 {
     LANE_COUNT as f32 * LANE_WIDTH + (LANE_COUNT as f32 - 1.0) * LANE_GAP
 }
 
+/// 计算指定轨道的 x 坐标
 fn lane_x(idx: usize) -> f32 {
     let left = -total_width() / 2.0 + LANE_WIDTH / 2.0;
     let offset = (RIGHT_PANEL_GAP + VISIBLE_HEIGHT) / 2.0;

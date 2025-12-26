@@ -1,15 +1,28 @@
+//! BGA（背景动画）渲染模块
+//!
+//! - 负责加载图片纹理并写入绑定组
+//! - 根据屏幕尺寸居中缩放绘制单张图片
+//! - 与主矩形渲染管线复用统一缓冲
+
 use anyhow::Result;
 use std::path::Path;
 
+/// 简易 BGA 渲染器：负责加载图片并绘制到屏幕
 pub struct BgaRenderer {
+    /// 渲染管线
     pipeline: wgpu::RenderPipeline,
+    /// 绑定组布局
     bind_group_layout: wgpu::BindGroupLayout,
+    /// 图片绑定组（若未加载则为 None）
     bind_group: Option<wgpu::BindGroup>,
+    /// 实例缓冲（用于传入位置与尺寸）
     instance_buf: wgpu::Buffer,
+    /// 当前是否启用绘制
     active: bool,
 }
 
 impl BgaRenderer {
+    /// 创建 BGA 渲染器并初始化管线与缓冲
     pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("tex-shader"),
@@ -117,6 +130,7 @@ impl BgaRenderer {
         }
     }
 
+    /// 从路径读取图片并更新绑定组与实例
     pub fn update_image_from_path(
         &mut self,
         device: &wgpu::Device,
@@ -199,6 +213,7 @@ impl BgaRenderer {
         Ok(())
     }
 
+    /// 在当前渲染通道中绘制已激活的 BGA
     pub fn draw(
         &self,
         rpass: &mut wgpu::RenderPass<'_>,

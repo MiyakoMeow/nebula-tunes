@@ -11,18 +11,25 @@ use bms_rs::chart_process::types::PlayheadEvent;
 use gametime::{TimeSpan, TimeStamp};
 use tokio::sync::mpsc;
 
-use crate::loops::audio::{AudioEvent, AudioMsg};
+use crate::loops::audio::{Event, Msg};
 use crate::loops::visual::{base_instances, build_instances_for_processor_with_state};
 use crate::loops::{ControlMsg, InputMsg, VisualMsg};
 
+/// 判定配置参数
 pub struct JudgeParams {
+    /// 可见区域的时间跨度
     pub travel: TimeSpan,
+    /// 各判定等级的时间窗口（从严到宽）
     pub windows: [TimeSpan; 4],
 }
 
+/// 游戏运行时状态
 struct GameState {
+    /// 当前 8 轨按键按下状态
     pressed: [bool; 8],
+    /// 血条值 [0.0, 1.0]
     gauge: f32,
+    /// 连击数
     combo: u32,
 }
 
@@ -34,7 +41,7 @@ struct GameState {
 /// - `visual_tx`：视觉实例帧发送端
 /// - `audio_tx`：音频播放请求发送端
 #[allow(clippy::too_many_arguments)]
-pub async fn run_main_loop(
+pub async fn run(
     mut processor: Option<BmsProcessor>,
     audio_paths: HashMap<WavId, PathBuf>,
     bmp_paths: HashMap<BmpId, PathBuf>,
@@ -42,8 +49,8 @@ pub async fn run_main_loop(
     visual_tx: mpsc::Sender<VisualMsg>,
     mut input_rx: mpsc::Receiver<InputMsg>,
     judge: JudgeParams,
-    audio_tx: mpsc::Sender<AudioMsg>,
-    mut audio_event_rx: mpsc::Receiver<AudioEvent>,
+    audio_tx: mpsc::Sender<Msg>,
+    mut audio_event_rx: mpsc::Receiver<Event>,
 ) {
     match control_rx.recv().await {
         Some(ControlMsg::Start) => {}
@@ -51,9 +58,9 @@ pub async fn run_main_loop(
     }
     // 预加载所有音频资源，并等待完成事件
     let files: Vec<PathBuf> = audio_paths.values().cloned().collect();
-    let _ = audio_tx.send(AudioMsg::PreloadAll { files }).await;
+    let _ = audio_tx.send(Msg::PreloadAll { files }).await;
     match audio_event_rx.recv().await {
-        Some(AudioEvent::PreloadFinished) => {}
+        Some(Event::PreloadFinished) => {}
         None => return,
     }
     if let Some(p) = processor.as_mut() {
@@ -77,8 +84,8 @@ pub async fn run_main_loop(
         loop {
             match input_rx.try_recv() {
                 Ok(InputMsg::KeyDown(idx)) => {
-                    if idx < state.pressed.len() {
-                        state.pressed[idx] = true;
+                    if let Some(flag) = state.pressed.get_mut(idx) {
+                        *flag = true;
                     }
                     let mut best: Option<(PlayheadEvent, f32)> = None;
                     for (ev, ratio) in p.visible_events() {
@@ -135,7 +142,7 @@ pub async fn run_main_loop(
                             if let ChartEvent::Note { wav_id, .. } = ev.event()
                                 && let Some(wav_id) = wav_id.as_ref()
                                 && let Some(path) = audio_paths.get(wav_id)
-                                && audio_tx.try_send(AudioMsg::Play(path.clone())).is_ok()
+                                && audio_tx.try_send(Msg::Play(path.clone())).is_ok()
                             {
                                 audio_plays_this_sec = audio_plays_this_sec.saturating_add(1);
                             }
@@ -146,7 +153,7 @@ pub async fn run_main_loop(
                             if let ChartEvent::Note { wav_id, .. } = ev.event()
                                 && let Some(wav_id) = wav_id.as_ref()
                                 && let Some(path) = audio_paths.get(wav_id)
-                                && audio_tx.try_send(AudioMsg::Play(path.clone())).is_ok()
+                                && audio_tx.try_send(Msg::Play(path.clone())).is_ok()
                             {
                                 audio_plays_this_sec = audio_plays_this_sec.saturating_add(1);
                             }
@@ -162,8 +169,8 @@ pub async fn run_main_loop(
                     }
                 }
                 Ok(InputMsg::KeyUp(idx)) => {
-                    if idx < state.pressed.len() {
-                        state.pressed[idx] = false;
+                    if let Some(flag) = state.pressed.get_mut(idx) {
+                        *flag = false;
                     }
                 }
                 Err(mpsc::error::TryRecvError::Empty) => break,
@@ -195,12 +202,12 @@ pub async fn run_main_loop(
             if let ChartEvent::Bgm { wav_id } = ev.event()
                 && let Some(wav_id) = wav_id.as_ref()
                 && let Some(path) = audio_paths.get(wav_id)
-                && audio_tx.try_send(AudioMsg::Play(path.clone())).is_ok()
+                && audio_tx.try_send(Msg::Play(path.clone())).is_ok()
             {
                 audio_plays_this_sec = audio_plays_this_sec.saturating_add(1);
             }
         }
-        let instances = build_instances_for_processor_with_state(p, &state.pressed, state.gauge);
+        let instances = build_instances_for_processor_with_state(p, state.pressed, state.gauge);
         let _ = visual_tx.try_send(VisualMsg::Instances(instances));
         let Some(start) = p.started_at() else {
             continue;

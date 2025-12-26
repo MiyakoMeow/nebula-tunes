@@ -11,7 +11,10 @@ futures-lite = "2"
 async-fs = "2"
 clap = { version = "4", features = ["derive"] }
 gametime = { version = "0.7", features = ["global_reference"] }
-wgpu = { version = "28", default-features = false, features = ["wgsl", "vulkan"] }
+wgpu = { version = "28", default-features = false, features = [
+    "wgsl",
+    "vulkan",
+] }
 winit = { version = "0.30", features = ["serde"] }
 pollster = "0.4"
 bytemuck = "1"
@@ -19,7 +22,7 @@ rodio = "0.21"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 toml = "0.9"
-image = { version = "0.25", default-features = true, features = ["png", "jpeg", "bmp"] }
+image = "0.25"
 
 [dependencies.bms-rs]
 git = "https://github.com/MikuroXina/bms-rs"
@@ -50,3 +53,69 @@ inherits = "release"
 opt-level = "s"
 # Strip all debugging information from the binary to slightly reduce file size.
 strip = "debuginfo"
+
+[lints.rust]
+missing_docs = "warn"
+
+[lints.clippy]
+# 文档与接口
+doc_markdown = "warn"
+missing_errors_doc = "warn"
+missing_docs_in_private_items = "warn"
+
+# API 语义与可用性
+must_use_candidate = "warn"
+must_use_unit = "warn"
+missing_const_for_fn = "warn"
+missing_const_for_thread_local = "warn"
+default_trait_access = "warn"
+option_option = "warn"
+ptr_arg = "warn"
+incompatible_msrv = "warn"
+panic_in_result_fn = "warn"
+
+# 借用与克隆
+redundant_clone = "warn"
+clone_on_copy = "warn"
+implicit_clone = "warn"
+unnecessary_to_owned = "warn"
+needless_borrow = "warn"
+needless_borrows_for_generic_args = "warn"
+needless_borrowed_reference = "warn"
+trivially_copy_pass_by_ref = "warn"
+
+# 代码风格
+redundant_closure_for_method_calls = "warn"
+redundant_closure = "warn"
+redundant_closure_call = "warn"
+redundant_else = "warn"
+redundant_feature_names = "warn"
+semicolon_if_nothing_returned = "warn"
+module_name_repetitions = "warn"
+match_bool = "warn"
+needless_range_loop = "warn"
+shadow_unrelated = "warn"
+macro_use_imports = "warn"
+explicit_deref_methods = "warn"
+significant_drop_in_scrutinee = "warn"
+
+# 数值比较
+float_cmp = "warn"
+
+# 并发与异步
+await_holding_lock = "warn"
+async_yields_async = "warn"
+future_not_send = "warn"
+large_futures = "warn"
+if_let_mutex = "warn"
+
+# 性能与内存
+manual_memcpy = "warn"
+
+# 模块与导入
+wildcard_imports = "warn"
+
+# 安全与错误处理
+unwrap_used = "warn"
+expect_used = "warn"
+indexing_slicing = "warn"

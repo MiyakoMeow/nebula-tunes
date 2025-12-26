@@ -1,14 +1,8 @@
 //! # Nebula Tunes 主程序
 
-#![warn(missing_docs)]
-#![warn(clippy::must_use_candidate)]
-#![warn(clippy::must_use_unit)]
-#![warn(clippy::redundant_clone)]
-#![warn(clippy::redundant_closure_for_method_calls)]
-#![warn(clippy::redundant_else)]
-#![warn(clippy::redundant_feature_names)]
-
+/// 系统配置模块
 mod config;
+/// 文件系统工具模块
 mod filesystem;
 mod loops;
 
@@ -28,12 +22,15 @@ use crate::config::load_sys_config;
 use crate::loops::{InputMsg, VisualMsg, audio, main_loop, visual};
 
 #[derive(Parser)]
+/// 命令行参数
 struct ExecArgs {
     #[arg(long)]
+    /// 指定要加载的 BMS 文件路径
     bms_path: Option<PathBuf>,
 }
 
-fn key_to_lane(key: Key) -> Option<usize> {
+/// 将按键映射到轨道索引
+const fn key_to_lane(key: Key) -> Option<usize> {
     match key {
         Key::Scratch(_) => Some(0),
         Key::Key(n) => match n {
@@ -48,8 +45,11 @@ fn key_to_lane(key: Key) -> Option<usize> {
 #[derive(Clone, Copy, Zeroable, Pod)]
 /// 单个矩形实例（位置、大小、颜色）
 pub struct Instance {
+    /// 中心坐标（x, y）
     pos: [f32; 2],
+    /// 尺寸（宽, 高）
     size: [f32; 2],
+    /// 颜色（RGBA）
     color: [f32; 4],
 }
 
@@ -67,7 +67,9 @@ async fn load_bms_and_collect_paths(
     let enc = det.guess(None, true);
     let (bms_str, _, _) = enc.decode(&bms_bytes);
     let BmsOutput { bms, warnings: _ } = bms_rs::bms::parse_bms(&bms_str, default_config());
-    let bms = bms.unwrap();
+    let Ok(bms) = bms else {
+        anyhow::bail!("failed to parse BMS")
+    };
     // print bms info
     println!("Title: {:?}", bms.music_info.title);
     println!("Artist: {:?}", bms.music_info.artist);
@@ -137,10 +139,10 @@ async fn main() -> Result<()> {
     let (control_tx, control_rx) = mpsc::channel::<loops::ControlMsg>(1);
     let (visual_tx, visual_rx) = mpsc::channel::<VisualMsg>(2);
     let (input_tx, input_rx) = mpsc::channel::<InputMsg>(64);
-    let (audio_tx, audio_rx) = mpsc::channel::<audio::AudioMsg>(64);
-    let (audio_event_tx, audio_event_rx) = mpsc::channel::<audio::AudioEvent>(1);
+    let (audio_tx, audio_rx) = mpsc::channel::<audio::Msg>(64);
+    let (audio_event_tx, audio_event_rx) = mpsc::channel::<audio::Event>(1);
     let _audio_handle = tokio::spawn(audio::run_audio_loop(audio_rx, audio_event_tx));
-    let _main_handle = tokio::spawn(main_loop::run_main_loop(
+    let _main_handle = tokio::spawn(main_loop::run(
         pre_processor,
         pre_audio_paths,
         pre_bmp_paths,

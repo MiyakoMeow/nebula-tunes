@@ -13,12 +13,15 @@ use std::path::PathBuf;
 
 /// 控制主循环启动的消息
 pub enum ControlMsg {
+    /// 触发主循环开始
     Start,
 }
 
 /// 输入事件消息
 pub enum InputMsg {
+    /// 某轨道按键按下（索引）
     KeyDown(usize),
+    /// 某轨道按键抬起（索引）
     KeyUp(usize),
 }
 
