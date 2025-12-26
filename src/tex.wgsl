@@ -29,7 +29,10 @@ fn vs_main(
         world.y / (screen.size.y * 0.5),
     );
     out.pos = vec4<f32>(ndc, 0.0, 1.0);
-    out.uv = vpos * 0.5 + vec2<f32>(0.5, 0.5);
+    out.uv = vec2<f32>(
+        vpos.x + 0.5,
+        1.0 - (vpos.y + 0.5),
+    );
     return out;
 }
 
