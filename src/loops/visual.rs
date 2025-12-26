@@ -9,7 +9,7 @@ mod bga;
 /// 音符与轨道实例构建
 mod note;
 pub use note::{base_instances, build_instances_for_processor_with_state};
-use std::collections::HashMap;
+use std::{collections::HashMap, path::Path};
 use tokio::sync::mpsc;
 
 use winit::{
@@ -28,12 +28,20 @@ use winit::keyboard::{KeyCode, PhysicalKey};
 
 /// 视觉应用状态
 pub struct App {
+    /// 窗口实例
+    window: winit::window::Window,
     /// 渲染器实例
-    renderer: Renderer,
+    renderer: Option<Box<dyn RenderBackend>>,
     /// 视觉消息接收端
     visual_rx: mpsc::Receiver<VisualMsg>,
     /// 最新一帧的实例列表
     latest_instances: Vec<Instance>,
+}
+
+impl Drop for App {
+    fn drop(&mut self) {
+        let _ = self.renderer.take();
+    }
 }
 
 /// 视觉事件处理器
@@ -80,6 +88,16 @@ struct ScreenUniform {
     size: [f32; 2],
 }
 
+/// 渲染后端接口
+pub trait RenderBackend {
+    /// 处理窗口尺寸变化
+    fn resize(&mut self, width: u32, height: u32);
+    /// 绘制一帧
+    fn draw(&self, instances: &[Instance]) -> Result<()>;
+    /// 根据给定路径加载并更新 BGA 图片
+    fn update_bga_image_from_path(&mut self, path: &Path) -> Result<()>;
+}
+
 /// 简易矩形渲染器，负责上传实例并绘制
 pub struct Renderer {
     /// 渲染表面
@@ -106,15 +124,13 @@ pub struct Renderer {
     bga: bga::BgaRenderer,
     /// 三角形索引数量
     index_count: u32,
-    /// 关联窗口
-    pub(crate) window: winit::window::Window,
     /// 逻辑屏幕尺寸
     logical_size: [f32; 2],
 }
 
 impl Renderer {
     /// 创建渲染器并初始化管线、缓冲与资源
-    async fn new(window: winit::window::Window) -> Result<Self> {
+    async fn new(window: &winit::window::Window) -> Result<Self> {
         let instance = wgpu::Instance::default();
         let surface = unsafe {
             instance.create_surface_unsafe(
@@ -284,13 +300,12 @@ impl Renderer {
             instance_buf,
             bga,
             index_count: 6,
-            window,
             logical_size,
         })
     }
 
     /// 调整画布大小
-    fn resize(&mut self, width: u32, height: u32) {
+    fn resize_surface(&mut self, width: u32, height: u32) {
         if width > 0 && height > 0 {
             self.config.width = width;
             self.config.height = height;
@@ -309,7 +324,7 @@ impl Renderer {
     }
 
     /// 绘制一帧可视实例
-    fn draw(&self, instances: &[Instance]) -> Result<()> {
+    fn draw_frame(&self, instances: &[Instance]) -> Result<()> {
         self.upload_screen_uniform();
         let frame = self.surface.get_current_texture()?;
         let view = frame
@@ -354,9 +369,23 @@ impl Renderer {
     }
 
     /// 根据给定路径加载并更新 BGA 图片
-    fn update_bga_image_from_path(&mut self, path: &std::path::Path) -> Result<()> {
+    fn update_bga_from_path(&mut self, path: &Path) -> Result<()> {
         self.bga
             .update_image_from_path(&self.device, &self.queue, &self.screen_buffer, path)
+    }
+}
+
+impl RenderBackend for Renderer {
+    fn resize(&mut self, width: u32, height: u32) {
+        self.resize_surface(width, height);
+    }
+
+    fn draw(&self, instances: &[Instance]) -> Result<()> {
+        self.draw_frame(instances)
+    }
+
+    fn update_bga_image_from_path(&mut self, path: &Path) -> Result<()> {
+        self.update_bga_from_path(path)
     }
 }
 
@@ -400,7 +429,7 @@ impl ApplicationHandler for Handler {
             Ok(w) => w,
             Err(_) => return,
         };
-        let renderer = match futures_lite::future::block_on(Renderer::new(window)) {
+        let renderer = match futures_lite::future::block_on(Renderer::new(&window)) {
             Ok(r) => r,
             Err(_) => return,
         };
@@ -409,7 +438,8 @@ impl ApplicationHandler for Handler {
             None => return,
         };
         self.app = Some(App {
-            renderer,
+            window,
+            renderer: Some(Box::new(renderer)),
             visual_rx: rx,
             latest_instances: base_instances(),
         });
@@ -420,8 +450,11 @@ impl ApplicationHandler for Handler {
             WindowEvent::CloseRequested => {}
             WindowEvent::Resized(size) => {
                 if let Some(app) = self.app.as_mut() {
-                    app.renderer.resize(size.width, size.height);
-                    app.renderer.window.request_redraw();
+                    let Some(renderer) = app.renderer.as_mut() else {
+                        return;
+                    };
+                    renderer.resize(size.width, size.height);
+                    app.window.request_redraw();
                 }
             }
             WindowEvent::KeyboardInput { event, .. } => {
@@ -442,6 +475,9 @@ impl ApplicationHandler for Handler {
             }
             WindowEvent::RedrawRequested => {
                 if let Some(app) = self.app.as_mut() {
+                    let Some(renderer) = app.renderer.as_mut() else {
+                        return;
+                    };
                     loop {
                         match app.visual_rx.try_recv() {
                             Ok(msg) => match msg {
@@ -449,14 +485,14 @@ impl ApplicationHandler for Handler {
                                     app.latest_instances = instances;
                                 }
                                 VisualMsg::Bga(path) => {
-                                    let _ = app.renderer.update_bga_image_from_path(&path);
+                                    let _ = renderer.update_bga_image_from_path(&path);
                                 }
                             },
                             Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
                             Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => break,
                         }
                     }
-                    let _ = app.renderer.draw(&app.latest_instances);
+                    let _ = renderer.draw(&app.latest_instances);
                 }
             }
             _ => {}
@@ -464,7 +500,7 @@ impl ApplicationHandler for Handler {
     }
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
         if let Some(app) = self.app.as_mut() {
-            app.renderer.window.request_redraw();
+            app.window.request_redraw();
         }
     }
 }
