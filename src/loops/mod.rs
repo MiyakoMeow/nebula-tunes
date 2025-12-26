@@ -13,3 +13,9 @@ pub mod visual;
 pub enum ControlMsg {
     Start,
 }
+
+/// 输入事件消息
+pub enum InputMsg {
+    KeyDown(usize),
+    KeyUp(usize),
+}

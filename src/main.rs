@@ -23,7 +23,7 @@ use gametime::TimeSpan;
 use tokio::sync::mpsc;
 use winit::event_loop::EventLoop;
 
-use crate::loops::{audio, main_loop, visual};
+use crate::loops::{InputMsg, audio, main_loop, visual};
 
 #[derive(Parser)]
 struct ExecArgs {
@@ -112,6 +112,7 @@ async fn main() -> Result<()> {
     };
     let (control_tx, control_rx) = mpsc::channel::<loops::ControlMsg>(1);
     let (visual_tx, visual_rx) = mpsc::channel::<Vec<Instance>>(2);
+    let (input_tx, input_rx) = mpsc::channel::<InputMsg>(64);
     let (audio_tx, audio_rx) = mpsc::channel::<audio::AudioMsg>(64);
     let (audio_event_tx, audio_event_rx) = mpsc::channel::<audio::AudioEvent>(1);
     let _audio_handle = tokio::spawn(audio::run_audio_loop(audio_rx, audio_event_tx));
@@ -120,10 +121,11 @@ async fn main() -> Result<()> {
         pre_audio_paths,
         control_rx,
         visual_tx,
+        input_rx,
         audio_tx,
         audio_event_rx,
     ));
-    let mut handler = visual::Handler::new(visual_rx, control_tx);
+    let mut handler = visual::Handler::new(visual_rx, control_tx, input_tx);
     event_loop.run_app(&mut handler)?;
     Ok(())
 }

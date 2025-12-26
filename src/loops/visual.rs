@@ -12,13 +12,15 @@ use winit::{
 };
 
 use crate::Instance;
-use crate::loops::ControlMsg;
+use crate::loops::{ControlMsg, InputMsg};
 
 use crate::key_to_lane;
 use anyhow::Result;
 use bms_rs::chart_process::prelude::*;
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
+use winit::event::ElementState;
+use winit::keyboard::{KeyCode, PhysicalKey};
 
 /// 视觉应用状态
 pub struct App {
@@ -32,6 +34,7 @@ pub struct Handler {
     pub app: Option<App>,
     pub visual_rx: Option<mpsc::Receiver<Vec<Instance>>>,
     pub control_tx: mpsc::Sender<ControlMsg>,
+    pub input_tx: mpsc::Sender<InputMsg>,
 }
 
 impl Handler {
@@ -39,11 +42,13 @@ impl Handler {
     pub fn new(
         visual_rx: mpsc::Receiver<Vec<Instance>>,
         control_tx: mpsc::Sender<ControlMsg>,
+        input_tx: mpsc::Sender<InputMsg>,
     ) -> Self {
         Self {
             app: None,
             visual_rx: Some(visual_rx),
             control_tx,
+            input_tx,
         }
     }
 }
@@ -341,8 +346,11 @@ pub fn base_instances() -> Vec<Instance> {
     instances
 }
 
-/// 基于处理器构建完整一帧可视实例
-pub fn build_instances_for_processor(p: &mut BmsProcessor) -> Vec<Instance> {
+pub fn build_instances_for_processor_with_state(
+    p: &mut BmsProcessor,
+    pressed: &[bool; 8],
+    gauge: f32,
+) -> Vec<Instance> {
     let mut instances = base_instances();
     if p.started_at().is_some() {
         for (ev, ratio) in p.visible_events() {
@@ -365,6 +373,27 @@ pub fn build_instances_for_processor(p: &mut BmsProcessor) -> Vec<Instance> {
             });
         }
     }
+    for (i, pressed_flag) in pressed.iter().enumerate() {
+        if *pressed_flag {
+            instances.push(Instance {
+                pos: [lane_x(i), -VISIBLE_HEIGHT / 2.0 + 24.0],
+                size: [LANE_WIDTH - 8.0, 24.0],
+                color: [1.0, 1.0, 1.0, 0.25],
+            });
+        }
+    }
+    let gw = total_width();
+    let gy = VISIBLE_HEIGHT / 2.0 - 20.0;
+    instances.push(Instance {
+        pos: [0.0, gy],
+        size: [gw, 8.0],
+        color: [0.3, 0.3, 0.35, 1.0],
+    });
+    instances.push(Instance {
+        pos: [-gw / 2.0 + (gw * gauge) / 2.0, gy],
+        size: [gw * gauge, 8.0],
+        color: [0.2, 0.8, 0.4, 1.0],
+    });
     instances
 }
 impl ApplicationHandler for Handler {
@@ -401,6 +430,29 @@ impl ApplicationHandler for Handler {
                 if let Some(app) = self.app.as_mut() {
                     app.renderer.resize(size.width, size.height);
                     app.renderer.window.request_redraw();
+                }
+            }
+            WindowEvent::KeyboardInput { event, .. } => {
+                let lane = match event.physical_key {
+                    PhysicalKey::Code(KeyCode::ShiftLeft) => Some(0),
+                    PhysicalKey::Code(KeyCode::KeyA) => Some(1),
+                    PhysicalKey::Code(KeyCode::KeyS) => Some(2),
+                    PhysicalKey::Code(KeyCode::KeyD) => Some(3),
+                    PhysicalKey::Code(KeyCode::KeyF) => Some(4),
+                    PhysicalKey::Code(KeyCode::KeyJ) => Some(5),
+                    PhysicalKey::Code(KeyCode::KeyK) => Some(6),
+                    PhysicalKey::Code(KeyCode::KeyL) => Some(7),
+                    _ => None,
+                };
+                if let Some(idx) = lane {
+                    match event.state {
+                        ElementState::Pressed => {
+                            let _ = self.input_tx.try_send(InputMsg::KeyDown(idx));
+                        }
+                        ElementState::Released => {
+                            let _ = self.input_tx.try_send(InputMsg::KeyUp(idx));
+                        }
+                    }
                 }
             }
             WindowEvent::RedrawRequested => {
