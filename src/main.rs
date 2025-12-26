@@ -8,10 +8,11 @@
 #![warn(clippy::redundant_else)]
 #![warn(clippy::redundant_feature_names)]
 
+mod config;
 mod filesystem;
 mod loops;
 
-use std::{collections::HashMap, path::Path, path::PathBuf, time::Duration};
+use std::{collections::HashMap, path::Path, path::PathBuf};
 
 use anyhow::Result;
 use async_fs as afs;
@@ -23,6 +24,7 @@ use gametime::TimeSpan;
 use tokio::sync::mpsc;
 use winit::event_loop::EventLoop;
 
+use crate::config::load_sys_config;
 use crate::loops::{InputMsg, audio, main_loop, visual};
 
 #[derive(Parser)]
@@ -53,6 +55,7 @@ pub struct Instance {
 
 async fn load_bms_and_collect_paths(
     bms_path: PathBuf,
+    travel: TimeSpan,
 ) -> Result<(BmsProcessor, HashMap<WavId, PathBuf>)> {
     let bms_bytes = afs::read(&bms_path).await?;
     let mut det = EncodingDetector::new();
@@ -68,13 +71,8 @@ async fn load_bms_and_collect_paths(
         .generate(&bms)
         .unwrap_or(BaseBpm(120.0.into()));
     println!("BaseBpm: {}", base_bpm.value());
-    let processor = BmsProcessor::new::<KeyLayoutBeat>(
-        &bms,
-        VisibleRangePerBpm::new(
-            &base_bpm,
-            TimeSpan::from_duration(Duration::from_secs_f32(0.6)),
-        ),
-    );
+    let processor =
+        BmsProcessor::new::<KeyLayoutBeat>(&bms, VisibleRangePerBpm::new(&base_bpm, travel));
     let bms_dir = bms_path.parent().unwrap_or(Path::new(".")).to_path_buf();
     let mut audio_paths: HashMap<WavId, PathBuf> = HashMap::new();
     let child_list: Vec<PathBuf> = processor
@@ -102,10 +100,11 @@ async fn load_bms_and_collect_paths(
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let sys = load_sys_config(Path::new("config_sys.toml"))?;
     let args = ExecArgs::parse();
     let event_loop = EventLoop::new()?;
     let (pre_processor, pre_audio_paths) = if let Some(bms_path) = args.bms_path {
-        let (p, ap) = load_bms_and_collect_paths(bms_path).await?;
+        let (p, ap) = load_bms_and_collect_paths(bms_path, sys.judge.visible_travel).await?;
         (Some(p), ap)
     } else {
         (None, HashMap::new())
@@ -122,10 +121,14 @@ async fn main() -> Result<()> {
         control_rx,
         visual_tx,
         input_rx,
+        main_loop::JudgeParams {
+            travel: sys.judge.visible_travel,
+            windows: sys.judge.windows(),
+        },
         audio_tx,
         audio_event_rx,
     ));
-    let mut handler = visual::Handler::new(visual_rx, control_tx, input_tx);
+    let mut handler = visual::Handler::new(visual_rx, control_tx, input_tx, sys.keys.lanes.clone());
     event_loop.run_app(&mut handler)?;
     Ok(())
 }

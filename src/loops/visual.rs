@@ -4,6 +4,7 @@
 //! - 在 `RedrawRequested` 非阻塞接收最新帧并渲染
 //! - 在 `about_to_wait` 请求重绘以维持刷新
 
+use std::collections::HashMap;
 use tokio::sync::mpsc;
 
 use winit::{
@@ -35,20 +36,26 @@ pub struct Handler {
     pub visual_rx: Option<mpsc::Receiver<Vec<Instance>>>,
     pub control_tx: mpsc::Sender<ControlMsg>,
     pub input_tx: mpsc::Sender<InputMsg>,
+    key_map: HashMap<KeyCode, usize>,
 }
 
 impl Handler {
-    /// 构造视觉事件处理器
     pub fn new(
         visual_rx: mpsc::Receiver<Vec<Instance>>,
         control_tx: mpsc::Sender<ControlMsg>,
         input_tx: mpsc::Sender<InputMsg>,
+        key_codes: Vec<KeyCode>,
     ) -> Self {
+        let mut map = HashMap::new();
+        for (i, code) in key_codes.into_iter().enumerate().take(8) {
+            map.insert(code, i);
+        }
         Self {
             app: None,
             visual_rx: Some(visual_rx),
             control_tx,
             input_tx,
+            key_map: map,
         }
     }
 }
@@ -434,14 +441,7 @@ impl ApplicationHandler for Handler {
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 let lane = match event.physical_key {
-                    PhysicalKey::Code(KeyCode::ShiftLeft) => Some(0),
-                    PhysicalKey::Code(KeyCode::KeyA) => Some(1),
-                    PhysicalKey::Code(KeyCode::KeyS) => Some(2),
-                    PhysicalKey::Code(KeyCode::KeyD) => Some(3),
-                    PhysicalKey::Code(KeyCode::KeyF) => Some(4),
-                    PhysicalKey::Code(KeyCode::KeyJ) => Some(5),
-                    PhysicalKey::Code(KeyCode::KeyK) => Some(6),
-                    PhysicalKey::Code(KeyCode::KeyL) => Some(7),
+                    PhysicalKey::Code(code) => self.key_map.get(&code).copied(),
                     _ => None,
                 };
                 if let Some(idx) = lane {

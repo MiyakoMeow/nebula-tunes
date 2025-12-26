@@ -16,6 +16,11 @@ use crate::loops::audio::{AudioEvent, AudioMsg};
 use crate::loops::visual::{base_instances, build_instances_for_processor_with_state};
 use crate::loops::{ControlMsg, InputMsg};
 
+pub struct JudgeParams {
+    pub travel: TimeSpan,
+    pub windows: [TimeSpan; 4],
+}
+
 struct GameState {
     pressed: [bool; 8],
     gauge: f32,
@@ -29,12 +34,14 @@ struct GameState {
 /// - `control_rx`：启动控制消息接收端
 /// - `visual_tx`：视觉实例帧发送端
 /// - `audio_tx`：音频播放请求发送端
+#[allow(clippy::too_many_arguments)]
 pub async fn run_main_loop(
     mut processor: Option<BmsProcessor>,
     audio_paths: HashMap<WavId, PathBuf>,
     mut control_rx: mpsc::Receiver<ControlMsg>,
     visual_tx: mpsc::Sender<Vec<Instance>>,
     mut input_rx: mpsc::Receiver<InputMsg>,
+    judge: JudgeParams,
     audio_tx: mpsc::Sender<AudioMsg>,
     mut audio_event_rx: mpsc::Receiver<AudioEvent>,
 ) {
@@ -63,157 +70,156 @@ pub async fn run_main_loop(
     loop {
         ticker.tick().await;
         let now = TimeStamp::now();
-        if let Some(p) = processor.as_mut() {
-            loop {
-                match input_rx.try_recv() {
-                    Ok(InputMsg::KeyDown(idx)) => {
-                        if idx < state.pressed.len() {
-                            state.pressed[idx] = true;
+        let Some(p) = processor.as_mut() else {
+            let _ = visual_tx.try_send(base_instances());
+            continue;
+        };
+        loop {
+            match input_rx.try_recv() {
+                Ok(InputMsg::KeyDown(idx)) => {
+                    if idx < state.pressed.len() {
+                        state.pressed[idx] = true;
+                    }
+                    let mut best: Option<(PlayheadEvent, f32)> = None;
+                    for (ev, ratio) in p.visible_events() {
+                        let ChartEvent::Note {
+                            side,
+                            key,
+                            wav_id: _,
+                            ..
+                        } = ev.event()
+                        else {
+                            continue;
+                        };
+                        if *side != PlayerSide::Player1 {
+                            continue;
                         }
-                        let mut best: Option<(PlayheadEvent, f32)> = None;
-                        for (ev, ratio) in p.visible_events() {
-                            let ChartEvent::Note {
-                                side,
-                                key,
-                                wav_id: _,
-                                ..
-                            } = ev.event()
-                            else {
-                                continue;
-                            };
-                            if *side != PlayerSide::Player1 {
-                                continue;
-                            }
-                            let Some(lane) = crate::key_to_lane(*key) else {
-                                continue;
-                            };
-                            if lane != idx {
-                                continue;
-                            }
-                            let r = ratio.as_f64() as f32;
-                            if !(0.0..=1.0).contains(&r) {
-                                continue;
-                            }
-                            if let Some((_, br)) = &best {
-                                if r < *br {
-                                    best = Some((ev.clone(), r));
-                                }
-                            } else {
+                        let Some(lane) = crate::key_to_lane(*key) else {
+                            continue;
+                        };
+                        if lane != idx {
+                            continue;
+                        }
+                        let r = ratio.as_f64() as f32;
+                        if !(0.0..=1.0).contains(&r) {
+                            continue;
+                        }
+                        if let Some((_, br)) = &best {
+                            if r < *br {
                                 best = Some((ev.clone(), r));
                             }
-                        }
-                        if let Some((ev, r)) = best {
-                            let ms = r * 600.0;
-                            let judge = if ms <= 16.0 {
-                                4
-                            } else if ms <= 36.0 {
-                                3
-                            } else if ms <= 80.0 {
-                                2
-                            } else if ms <= 120.0 {
-                                1
-                            } else {
-                                0
-                            };
-                            match judge {
-                                4 | 3 => {
-                                    state.combo = state.combo.saturating_add(1);
-                                    state.gauge = (state.gauge + 0.02).min(1.0);
-                                    if let ChartEvent::Note { wav_id, .. } = ev.event()
-                                        && let Some(wav_id) = wav_id.as_ref()
-                                        && let Some(path) = audio_paths.get(wav_id)
-                                        && audio_tx.try_send(AudioMsg::Play(path.clone())).is_ok()
-                                    {
-                                        audio_plays_this_sec =
-                                            audio_plays_this_sec.saturating_add(1);
-                                    }
-                                }
-                                2 => {
-                                    state.combo = state.combo.saturating_add(1);
-                                    state.gauge = (state.gauge + 0.01).min(1.0);
-                                    if let ChartEvent::Note { wav_id, .. } = ev.event()
-                                        && let Some(wav_id) = wav_id.as_ref()
-                                        && let Some(path) = audio_paths.get(wav_id)
-                                        && audio_tx.try_send(AudioMsg::Play(path.clone())).is_ok()
-                                    {
-                                        audio_plays_this_sec =
-                                            audio_plays_this_sec.saturating_add(1);
-                                    }
-                                }
-                                1 => {
-                                    state.combo = 0;
-                                    state.gauge = (state.gauge - 0.03).max(0.0);
-                                }
-                                _ => {
-                                    state.combo = 0;
-                                    state.gauge = (state.gauge - 0.05).max(0.0);
-                                }
-                            }
+                        } else {
+                            best = Some((ev.clone(), r));
                         }
                     }
-                    Ok(InputMsg::KeyUp(idx)) => {
-                        if idx < state.pressed.len() {
-                            state.pressed[idx] = false;
-                        }
-                    }
-                    Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
-                    Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => break,
-                }
-            }
-            let events: Vec<PlayheadEvent> = p.update(now).collect();
-            for ev in &events {
-                if let ChartEvent::Note {
-                    side,
-                    key,
-                    wav_id: _,
-                    ..
-                } = ev.event()
-                {
-                    if *side != PlayerSide::Player1 {
-                        continue;
-                    }
-                    let Some(_idx) = crate::key_to_lane(*key) else {
+                    let Some((ev, r)) = best else {
                         continue;
                     };
+                    let nanos = (judge.travel.as_nanos() as f64 * r as f64).max(0.0) as u64;
+                    let dt = TimeSpan::from_duration(std::time::Duration::from_nanos(nanos));
+                    let judge = if dt.as_nanos() <= judge.windows[0].as_nanos() {
+                        4
+                    } else if dt.as_nanos() <= judge.windows[1].as_nanos() {
+                        3
+                    } else if dt.as_nanos() <= judge.windows[2].as_nanos() {
+                        2
+                    } else if dt.as_nanos() <= judge.windows[3].as_nanos() {
+                        1
+                    } else {
+                        0
+                    };
+                    match judge {
+                        4 | 3 => {
+                            state.combo = state.combo.saturating_add(1);
+                            state.gauge = (state.gauge + 0.02).min(1.0);
+                            if let ChartEvent::Note { wav_id, .. } = ev.event()
+                                && let Some(wav_id) = wav_id.as_ref()
+                                && let Some(path) = audio_paths.get(wav_id)
+                                && audio_tx.try_send(AudioMsg::Play(path.clone())).is_ok()
+                            {
+                                audio_plays_this_sec = audio_plays_this_sec.saturating_add(1);
+                            }
+                        }
+                        2 => {
+                            state.combo = state.combo.saturating_add(1);
+                            state.gauge = (state.gauge + 0.01).min(1.0);
+                            if let ChartEvent::Note { wav_id, .. } = ev.event()
+                                && let Some(wav_id) = wav_id.as_ref()
+                                && let Some(path) = audio_paths.get(wav_id)
+                                && audio_tx.try_send(AudioMsg::Play(path.clone())).is_ok()
+                            {
+                                audio_plays_this_sec = audio_plays_this_sec.saturating_add(1);
+                            }
+                        }
+                        1 => {
+                            state.combo = 0;
+                            state.gauge = (state.gauge - 0.03).max(0.0);
+                        }
+                        _ => {
+                            state.combo = 0;
+                            state.gauge = (state.gauge - 0.05).max(0.0);
+                        }
+                    }
                 }
-                if let ChartEvent::Bgm { wav_id } = ev.event()
-                    && let Some(wav_id) = wav_id.as_ref()
-                    && let Some(path) = audio_paths.get(wav_id)
-                    && audio_tx.try_send(AudioMsg::Play(path.clone())).is_ok()
-                {
-                    audio_plays_this_sec = audio_plays_this_sec.saturating_add(1);
+                Ok(InputMsg::KeyUp(idx)) => {
+                    if idx < state.pressed.len() {
+                        state.pressed[idx] = false;
+                    }
+                }
+                Err(mpsc::error::TryRecvError::Empty) => break,
+                Err(mpsc::error::TryRecvError::Disconnected) => break,
+            }
+        }
+        let events: Vec<PlayheadEvent> = p.update(now).collect();
+        for ev in &events {
+            if let ChartEvent::Note {
+                side,
+                key,
+                wav_id: _,
+                ..
+            } = ev.event()
+            {
+                if *side != PlayerSide::Player1 {
+                    continue;
+                }
+                let Some(_idx) = crate::key_to_lane(*key) else {
+                    continue;
+                };
+            }
+            if let ChartEvent::Bgm { wav_id } = ev.event()
+                && let Some(wav_id) = wav_id.as_ref()
+                && let Some(path) = audio_paths.get(wav_id)
+                && audio_tx.try_send(AudioMsg::Play(path.clone())).is_ok()
+            {
+                audio_plays_this_sec = audio_plays_this_sec.saturating_add(1);
+            }
+        }
+        let instances = build_instances_for_processor_with_state(p, &state.pressed, state.gauge);
+        let _ = visual_tx.try_send(instances);
+        let Some(start) = p.started_at() else {
+            continue;
+        };
+        let elapsed = now.checked_elapsed_since(start).unwrap_or(TimeSpan::ZERO);
+        let sec = (elapsed.as_nanos().max(0) as u64) / 1_000_000_000;
+        if sec != last_log_sec {
+            let visible = p.visible_events().count();
+            let mut min_r: f32 = 1.0;
+            let mut max_r: f32 = 0.0;
+            for (_, r) in p.visible_events() {
+                let rf = r.as_f64() as f32;
+                if rf < min_r {
+                    min_r = rf;
+                }
+                if rf > max_r {
+                    max_r = rf;
                 }
             }
-            let instances =
-                build_instances_for_processor_with_state(p, &state.pressed, state.gauge);
-            let _ = visual_tx.try_send(instances);
-            let Some(start) = p.started_at() else {
-                continue;
-            };
-            let elapsed = now.checked_elapsed_since(start).unwrap_or(TimeSpan::ZERO);
-            let sec = (elapsed.as_nanos().max(0) as u64) / 1_000_000_000;
-            if sec != last_log_sec {
-                let visible = p.visible_events().count();
-                let mut min_r: f32 = 1.0;
-                let mut max_r: f32 = 0.0;
-                for (_, r) in p.visible_events() {
-                    let rf = r.as_f64() as f32;
-                    if rf < min_r {
-                        min_r = rf;
-                    }
-                    if rf > max_r {
-                        max_r = rf;
-                    }
-                }
-                println!(
-                    "elapsed={}s visible={} ratio=[{:.2},{:.2}] audio={}",
-                    sec, visible, min_r, max_r, audio_plays_this_sec
-                );
-                audio_plays_this_sec = 0;
-                last_log_sec = sec;
-            }
-        } else {
-            let _ = visual_tx.try_send(base_instances());
+            println!(
+                "elapsed={}s visible={} ratio=[{:.2},{:.2}] audio={}",
+                sec, visible, min_r, max_r, audio_plays_this_sec
+            );
+            audio_plays_this_sec = 0;
+            last_log_sec = sec;
         }
     }
 }

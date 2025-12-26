@@ -1,0 +1,6 @@
+[keys]
+lanes = ["KeyA", "KeyS", "KeyD", "KeyF", "Space", "KeyJ", "KeyK", "KeyL"]
+
+[judge]
+visible_travel_ms = 600.0
+preset = "LR2"
