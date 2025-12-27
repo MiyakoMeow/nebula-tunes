@@ -1,11 +1,6 @@
 //! winit 窗口与事件循环入口
 
-use std::{
-    collections::HashMap,
-    path::PathBuf,
-    sync::mpsc,
-    thread::{self, JoinHandle},
-};
+use std::{collections::HashMap, sync::mpsc};
 
 use anyhow::Result;
 use futures_lite::future;
@@ -18,35 +13,15 @@ use winit::{
     window::WindowId,
 };
 
-use crate::Instance;
+use crate::entry::visual_app::VisualApp;
 use crate::loops::{ControlMsg, InputMsg, VisualMsg, visual};
 
 /// 视觉应用状态
 struct App {
     /// 窗口实例
     window: winit::window::Window,
-    /// 渲染器实例
-    renderer: Option<visual::Renderer>,
-    /// 视觉消息接收端
-    visual_rx: mpsc::Receiver<VisualMsg>,
-    /// 最新一帧的实例列表
-    latest_instances: Vec<Instance>,
-    /// BGA 解码请求发送端（发送图片路径）
-    bga_decode_tx: Option<mpsc::Sender<PathBuf>>,
-    /// BGA 解码结果接收端（rgba, w, h）
-    bga_decoded_rx: mpsc::Receiver<(Vec<u8>, u32, u32)>,
-    /// BGA 解码线程句柄
-    bga_decode_thread: Option<JoinHandle<()>>,
-}
-
-impl Drop for App {
-    fn drop(&mut self) {
-        let _ = self.bga_decode_tx.take();
-        if let Some(handle) = self.bga_decode_thread.take() {
-            let _ = handle.join();
-        }
-        let _ = self.renderer.take();
-    }
+    /// 视觉渲染应用
+    app: VisualApp,
 }
 
 /// 视觉事件处理器
@@ -150,41 +125,9 @@ impl ApplicationHandler for Handler {
             Some(r) => r,
             None => return,
         };
-        let (bga_decode_tx, bga_decode_rx) = mpsc::channel::<PathBuf>();
-        let (bga_decoded_tx, bga_decoded_rx) = mpsc::channel::<(Vec<u8>, u32, u32)>();
-        let bga_decode_thread = thread::spawn(move || {
-            loop {
-                let Ok(mut path) = bga_decode_rx.recv() else {
-                    break;
-                };
-                loop {
-                    match bga_decode_rx.try_recv() {
-                        Ok(new_path) => path = new_path,
-                        Err(mpsc::TryRecvError::Empty) => break,
-                        Err(mpsc::TryRecvError::Disconnected) => return,
-                    }
-                }
-                let decoded = (|| -> Option<(Vec<u8>, u32, u32)> {
-                    let bytes = std::fs::read(path).ok()?;
-                    let img = image::load_from_memory(&bytes).ok()?;
-                    let rgba = img.to_rgba8();
-                    let w = rgba.width();
-                    let h = rgba.height();
-                    Some((rgba.into_raw(), w, h))
-                })();
-                if let Some(decoded) = decoded {
-                    let _ = bga_decoded_tx.send(decoded);
-                }
-            }
-        });
         self.app = Some(App {
             window,
-            renderer: Some(renderer),
-            visual_rx: rx,
-            latest_instances: visual::base_instances(),
-            bga_decode_tx: Some(bga_decode_tx),
-            bga_decoded_rx,
-            bga_decode_thread: Some(bga_decode_thread),
+            app: VisualApp::new(renderer, rx),
         });
         let _ = self.control_tx.try_send(ControlMsg::Start);
     }
@@ -193,10 +136,8 @@ impl ApplicationHandler for Handler {
         match event {
             WindowEvent::CloseRequested => {}
             WindowEvent::Resized(size) => {
-                if let Some(app) = self.app.as_mut()
-                    && let Some(renderer) = app.renderer.as_mut()
-                {
-                    renderer.resize(size.width, size.height);
+                if let Some(app) = self.app.as_mut() {
+                    app.app.resize(size.width, size.height);
                     app.window.request_redraw();
                 }
             }
@@ -217,35 +158,8 @@ impl ApplicationHandler for Handler {
                 }
             }
             WindowEvent::RedrawRequested => {
-                if let Some(app) = self.app.as_mut()
-                    && let Some(renderer) = app.renderer.as_mut()
-                {
-                    loop {
-                        match app.bga_decoded_rx.try_recv() {
-                            Ok((rgba, w, h)) => {
-                                let _ = renderer.update_bga_image_from_rgba(rgba.as_slice(), w, h);
-                            }
-                            Err(mpsc::TryRecvError::Empty) => break,
-                            Err(mpsc::TryRecvError::Disconnected) => break,
-                        }
-                    }
-                    loop {
-                        match app.visual_rx.try_recv() {
-                            Ok(msg) => match msg {
-                                VisualMsg::Instances(instances) => {
-                                    app.latest_instances = instances;
-                                }
-                                VisualMsg::Bga(path) => {
-                                    if let Some(tx) = &app.bga_decode_tx {
-                                        let _ = tx.send(path);
-                                    }
-                                }
-                            },
-                            Err(mpsc::TryRecvError::Empty) => break,
-                            Err(mpsc::TryRecvError::Disconnected) => break,
-                        }
-                    }
-                    let _ = renderer.draw(&app.latest_instances);
+                if let Some(app) = self.app.as_mut() {
+                    app.app.redraw();
                 }
             }
             _ => {}
