@@ -1,5 +1,6 @@
 //! winit 窗口与事件循环入口
 
+#![cfg(not(target_arch = "wasm32"))]
 use std::{
     collections::HashMap,
     sync::{Arc, mpsc},
