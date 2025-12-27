@@ -7,7 +7,6 @@
 mod bga;
 mod note;
 pub use note::{base_instances, build_instances_for_processor_with_state};
-use std::path::Path;
 
 use anyhow::Result;
 use bytemuck::{Pod, Zeroable};
@@ -257,10 +256,10 @@ impl Renderer {
         Ok(())
     }
 
-    /// 根据给定路径加载并更新 BGA 图片
-    pub fn update_bga_image_from_path(&mut self, path: &Path) -> Result<()> {
+    /// 更新 BGA 图片（RGBA8，sRGB）
+    pub fn update_bga_image_from_rgba(&mut self, rgba: &[u8], w: u32, h: u32) -> Result<()> {
         self.bga
-            .update_image_from_path(&self.device, &self.queue, &self.screen_buffer, path)
+            .update_image_from_rgba(&self.device, &self.queue, &self.screen_buffer, rgba, w, h)
     }
     /// 处理窗口尺寸变化
     pub fn resize(&mut self, width: u32, height: u32) {
