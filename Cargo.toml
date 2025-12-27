@@ -77,12 +77,12 @@ strip = "debuginfo"
 missing_docs = "warn"
 
 [lints.clippy]
-# 文档与接口
+# Documentation & API
 doc_markdown = "warn"
 missing_errors_doc = "warn"
 missing_docs_in_private_items = "warn"
 
-# API 语义与可用性
+# API semantics & usability
 must_use_candidate = "warn"
 must_use_unit = "warn"
 missing_const_for_fn = "warn"
@@ -93,7 +93,7 @@ ptr_arg = "warn"
 incompatible_msrv = "warn"
 panic_in_result_fn = "warn"
 
-# 借用与克隆
+# Borrowing & cloning
 redundant_clone = "warn"
 clone_on_copy = "warn"
 implicit_clone = "warn"
@@ -103,7 +103,7 @@ needless_borrows_for_generic_args = "warn"
 needless_borrowed_reference = "warn"
 trivially_copy_pass_by_ref = "warn"
 
-# 代码风格
+# Code style
 redundant_closure_for_method_calls = "warn"
 redundant_closure = "warn"
 redundant_closure_call = "warn"
@@ -112,29 +112,37 @@ redundant_feature_names = "warn"
 semicolon_if_nothing_returned = "warn"
 module_name_repetitions = "warn"
 match_bool = "warn"
+#match_same_arms = "warn"
+collapsible_match = "warn"
+option_if_let_else = "warn"
+manual_map = "warn"
+manual_filter = "warn"
+bind_instead_of_map = "warn"
 needless_range_loop = "warn"
 shadow_unrelated = "warn"
 macro_use_imports = "warn"
 explicit_deref_methods = "warn"
 significant_drop_in_scrutinee = "warn"
 
-# 数值比较
+# Numeric comparisons
 float_cmp = "warn"
 
-# 并发与异步
+# Concurrency & async
 await_holding_lock = "warn"
 async_yields_async = "warn"
 future_not_send = "warn"
 large_futures = "warn"
 if_let_mutex = "warn"
 
-# 性能与内存
+# Performance & memory
 manual_memcpy = "warn"
 
-# 模块与导入
+# Modules & imports
 wildcard_imports = "warn"
 
-# 安全与错误处理
+# Safety & error handling
 unwrap_used = "warn"
 expect_used = "warn"
+unnecessary_unwrap = "warn"
+unreachable = "warn"
 indexing_slicing = "warn"
