@@ -217,7 +217,8 @@ impl Renderer {
                     }
                 }
                 for (latest_layer, latest_path) in latest {
-                    if let Some(decoded) = bga::decode_and_cache(&bga_cache_for_decode, latest_path)
+                    if let Some(decoded) =
+                        bga::decode_and_cache(&bga_cache_for_decode, latest_layer, latest_path)
                     {
                         let _ = bga_decoded_tx.send((latest_layer, decoded));
                     }

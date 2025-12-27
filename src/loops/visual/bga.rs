@@ -5,9 +5,7 @@
 //! - 与主矩形渲染管线复用统一缓冲
 
 use std::{
-    borrow::Cow,
     collections::{HashMap, HashSet},
-    fs,
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
@@ -18,7 +16,9 @@ use std::{
 };
 
 use anyhow::Result;
+use async_fs as fs;
 use bytemuck::{Pod, Zeroable};
+use futures_lite::future;
 use image::{ImageBuffer, Luma};
 use imageproc::region_labelling::{Connectivity, connected_components};
 
@@ -34,10 +34,28 @@ pub struct BgaDecodedImage {
     pub height: u32,
 }
 
+/// 解码后的缓存变体
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum DecodeVariant {
+    /// 原始 RGBA
+    Raw,
+    /// 去除背景后的 RGBA
+    RemoveBackground,
+}
+
+/// 缓存键：路径 + 解码变体
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct CacheKey {
+    /// 文件路径
+    path: PathBuf,
+    /// 解码变体
+    variant: DecodeVariant,
+}
+
 /// BGA 图片解码缓存（跨线程共享）
 pub struct BgaDecodeCache {
-    /// 路径到已解码图片的映射
-    inner: Mutex<HashMap<PathBuf, Arc<BgaDecodedImage>>>,
+    /// (路径, 变体) 到已解码图片的映射
+    inner: Mutex<HashMap<CacheKey, Arc<BgaDecodedImage>>>,
 }
 
 impl BgaDecodeCache {
@@ -49,15 +67,20 @@ impl BgaDecodeCache {
         }
     }
 
-    /// 获取指定路径的已解码图片
+    /// 查询指定变体的缓存条目
     #[must_use]
-    pub fn get(&self, path: &Path) -> Option<Arc<BgaDecodedImage>> {
-        self.inner.lock().ok()?.get(path).cloned()
+    fn get_variant(&self, variant: DecodeVariant, path: &Path) -> Option<Arc<BgaDecodedImage>> {
+        let key = CacheKey {
+            path: path.to_path_buf(),
+            variant,
+        };
+        self.inner.lock().ok()?.get(&key).cloned()
     }
 
-    /// 将图片写入缓存并返回共享引用
-    pub fn insert(
+    /// 写入指定变体的缓存条目并返回共享引用
+    fn insert_variant(
         &self,
+        variant: DecodeVariant,
         path: PathBuf,
         rgba: Vec<u8>,
         width: u32,
@@ -69,15 +92,71 @@ impl BgaDecodeCache {
             height,
         });
         if let Ok(mut map) = self.inner.lock() {
-            map.insert(path, decoded.clone());
+            map.insert(CacheKey { path, variant }, decoded.clone());
         }
         decoded
     }
 }
 
+/// 将指定图层映射到预处理变体
+const fn layer_to_variant(layer: BgaLayer) -> DecodeVariant {
+    match layer {
+        BgaLayer::Layer | BgaLayer::Layer2 => DecodeVariant::RemoveBackground,
+        BgaLayer::Bga | BgaLayer::Poor => DecodeVariant::Raw,
+    }
+}
+
+/// 去除背景（黑色背景转透明）
+fn remove_background(rgba_buf: &mut [u8], width: u32, height: u32) {
+    let width_usize = width as usize;
+    let mask = ImageBuffer::from_fn(width, height, |x, y| {
+        let base = ((y as usize) * width_usize + (x as usize)) * 4;
+        let is_black = rgba_buf
+            .get(base..base + 4)
+            .and_then(|px| <[u8; 4]>::try_from(px).ok())
+            .is_some_and(|[r, g, b, a]| r == 0 && g == 0 && b == 0 && a != 0);
+        Luma([u8::from(is_black)])
+    });
+
+    let labels = connected_components(&mask, Connectivity::Four, Luma([0u8]));
+    let corners = [
+        (0u32, 0u32),
+        (width - 1, 0u32),
+        (0u32, height - 1),
+        (width - 1, height - 1),
+    ];
+    let mut targets = [0u32; 4];
+    let mut targets_len = 0usize;
+    for (x, y) in corners {
+        let label = *labels.get_pixel(x, y).0.first().unwrap_or(&0);
+        if label == 0 || targets.iter().take(targets_len).any(|v| *v == label) {
+            continue;
+        }
+        let Some(slot) = targets.get_mut(targets_len) else {
+            break;
+        };
+        *slot = label;
+        targets_len += 1;
+    }
+
+    if targets_len != 0 {
+        for (x, y, p) in labels.enumerate_pixels() {
+            let label = *p.0.first().unwrap_or(&0);
+            if label == 0 || !targets.iter().take(targets_len).any(|v| *v == label) {
+                continue;
+            }
+
+            let base = ((y as usize) * width_usize + (x as usize)) * 4;
+            if let Some(px) = rgba_buf.get_mut(base..base + 4) {
+                px.copy_from_slice(&[0, 0, 0, 0]);
+            }
+        }
+    }
+}
+
 /// 从文件路径读取并解码图片为 RGBA8 缓冲
-fn decode_image(path: &Path) -> Option<(Vec<u8>, u32, u32)> {
-    let bytes = fs::read(path).ok()?;
+async fn decode_image_async(path: &Path) -> Option<(Vec<u8>, u32, u32)> {
+    let bytes = fs::read(path).await.ok()?;
     let img = image::load_from_memory(&bytes).ok()?;
     let rgba = img.to_rgba8();
     let w = rgba.width();
@@ -85,16 +164,81 @@ fn decode_image(path: &Path) -> Option<(Vec<u8>, u32, u32)> {
     Some((rgba.into_raw(), w, h))
 }
 
+/// 对 RGBA 缓冲按变体进行预处理
+fn preprocess_rgba(mut rgba: Vec<u8>, width: u32, height: u32, variant: DecodeVariant) -> Vec<u8> {
+    if variant == DecodeVariant::RemoveBackground && width != 0 && height != 0 {
+        remove_background(&mut rgba, width, height);
+    }
+    rgba
+}
+
 /// 解码图片并写入缓存（缓存命中则直接返回）
 pub(crate) fn decode_and_cache(
     cache: &BgaDecodeCache,
+    layer: BgaLayer,
     path: PathBuf,
 ) -> Option<Arc<BgaDecodedImage>> {
-    if let Some(decoded) = cache.get(path.as_path()) {
+    let want = layer_to_variant(layer);
+    if let Some(decoded) = cache.get_variant(want, path.as_path()) {
         return Some(decoded);
     }
-    let (rgba, w, h) = decode_image(path.as_path())?;
-    Some(cache.insert(path, rgba, w, h))
+
+    if want == DecodeVariant::RemoveBackground
+        && let Some(raw) = cache.get_variant(DecodeVariant::Raw, path.as_path())
+    {
+        let rgba = preprocess_rgba(raw.rgba.clone(), raw.width, raw.height, want);
+        return Some(cache.insert_variant(want, path, rgba, raw.width, raw.height));
+    }
+
+    let (raw_rgba, w, h) = future::block_on(decode_image_async(path.as_path()))?;
+    let raw = cache.insert_variant(DecodeVariant::Raw, path.clone(), raw_rgba.clone(), w, h);
+    let processed = preprocess_rgba(raw_rgba, w, h, DecodeVariant::RemoveBackground);
+    let processed = cache.insert_variant(DecodeVariant::RemoveBackground, path, processed, w, h);
+    Some(match want {
+        DecodeVariant::Raw => raw,
+        DecodeVariant::RemoveBackground => processed,
+    })
+}
+
+/// 确保指定路径的两种预处理变体都已进入缓存
+fn ensure_preprocessed(cache: &BgaDecodeCache, path: PathBuf) {
+    let raw_exists = cache
+        .get_variant(DecodeVariant::Raw, path.as_path())
+        .is_some();
+    let processed_exists = cache
+        .get_variant(DecodeVariant::RemoveBackground, path.as_path())
+        .is_some();
+    if raw_exists && processed_exists {
+        return;
+    }
+
+    if !processed_exists && let Some(raw) = cache.get_variant(DecodeVariant::Raw, path.as_path()) {
+        let rgba = preprocess_rgba(
+            raw.rgba.clone(),
+            raw.width,
+            raw.height,
+            DecodeVariant::RemoveBackground,
+        );
+        let _ = cache.insert_variant(
+            DecodeVariant::RemoveBackground,
+            path,
+            rgba,
+            raw.width,
+            raw.height,
+        );
+        return;
+    }
+
+    let Some((raw_rgba, w, h)) = future::block_on(decode_image_async(path.as_path())) else {
+        return;
+    };
+    if !raw_exists {
+        let _ = cache.insert_variant(DecodeVariant::Raw, path.clone(), raw_rgba.clone(), w, h);
+    }
+    if !processed_exists {
+        let rgba = preprocess_rgba(raw_rgba, w, h, DecodeVariant::RemoveBackground);
+        let _ = cache.insert_variant(DecodeVariant::RemoveBackground, path, rgba, w, h);
+    }
 }
 
 /// 预先解码所有 BGA 图片到缓存，并每秒输出一次进度
@@ -150,7 +294,7 @@ pub fn preload_bga_files(cache: Arc<BgaDecodeCache>, files: Vec<PathBuf>) {
                         Err(_) => break,
                     }
                 };
-                let _ = decode_and_cache(cache.as_ref(), path);
+                ensure_preprocessed(cache.as_ref(), path);
                 loaded.fetch_add(1, Ordering::Relaxed);
             }
         }));
@@ -480,68 +624,6 @@ impl BgaRenderer {
         }
     }
 
-    /// 去除背景（黑色背景转透明）
-    fn remove_background(rgba_buf: &mut [u8], width: u32, height: u32) {
-        let width_usize = width as usize;
-        let mask = ImageBuffer::from_fn(width, height, |x, y| {
-            let base = ((y as usize) * width_usize + (x as usize)) * 4;
-            let is_black = rgba_buf
-                .get(base..base + 4)
-                .and_then(|px| <[u8; 4]>::try_from(px).ok())
-                .is_some_and(|[r, g, b, a]| r == 0 && g == 0 && b == 0 && a != 0);
-            Luma([u8::from(is_black)])
-        });
-
-        let labels = connected_components(&mask, Connectivity::Four, Luma([0u8]));
-        let corners = [
-            (0u32, 0u32),
-            (width - 1, 0u32),
-            (0u32, height - 1),
-            (width - 1, height - 1),
-        ];
-        let mut targets = [0u32; 4];
-        let mut targets_len = 0usize;
-        for (x, y) in corners {
-            let label = *labels.get_pixel(x, y).0.first().unwrap_or(&0);
-            if label == 0 || targets.iter().take(targets_len).any(|v| *v == label) {
-                continue;
-            }
-            let Some(slot) = targets.get_mut(targets_len) else {
-                break;
-            };
-            *slot = label;
-            targets_len += 1;
-        }
-
-        if targets_len != 0 {
-            for (x, y, p) in labels.enumerate_pixels() {
-                let label = *p.0.first().unwrap_or(&0);
-                if label == 0 || !targets.iter().take(targets_len).any(|v| *v == label) {
-                    continue;
-                }
-
-                let base = ((y as usize) * width_usize + (x as usize)) * 4;
-                if let Some(px) = rgba_buf.get_mut(base..base + 4) {
-                    px.copy_from_slice(&[0, 0, 0, 0]);
-                }
-            }
-        }
-    }
-
-    /// 处理图层图片（如去除背景）
-    fn process_layer_image<'a>(layer: BgaLayer, img: &RgbaImage<'a>) -> Cow<'a, [u8]> {
-        match layer {
-            BgaLayer::Layer | BgaLayer::Layer2 => {
-                let mut rgba_buf = img.rgba.to_vec();
-                if img.width != 0 && img.height != 0 {
-                    Self::remove_background(&mut rgba_buf, img.width, img.height);
-                }
-                Cow::Owned(rgba_buf)
-            }
-            BgaLayer::Bga | BgaLayer::Poor => Cow::Borrowed(img.rgba),
-        }
-    }
-
     /// 更新指定图层的图片（RGBA8，sRGB）
     pub fn update_layer_image(
         &mut self,
@@ -549,8 +631,6 @@ impl BgaRenderer {
         ctx: UploadCtx<'_>,
         img: RgbaImage<'_>,
     ) -> Result<()> {
-        let rgba = Self::process_layer_image(layer, &img);
-
         let texture = ctx.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("bga-texture"),
             size: wgpu::Extent3d {
@@ -572,7 +652,7 @@ impl BgaRenderer {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            &rgba,
+            img.rgba,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(4 * img.width),
