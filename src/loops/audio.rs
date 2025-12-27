@@ -6,16 +6,17 @@
 
 use std::{
     collections::HashMap,
+    fs,
     path::{Path, PathBuf},
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicU32, Ordering},
     },
+    thread,
     time::Duration,
 };
 
 use anyhow::Result;
-use async_fs as afs;
 use rodio::{Source, buffer::SamplesBuffer, decoder::Decoder, stream::OutputStream};
 use tokio::sync::mpsc;
 
@@ -64,11 +65,11 @@ impl Audio {
     }
 
     /// 获取指定路径的采样缓冲，若未缓存则读取并解码后加入缓存
-    async fn cached_buffer(&mut self, path: &Path) -> Result<Arc<SamplesBuffer>> {
+    fn cached_buffer(&mut self, path: &Path) -> Result<Arc<SamplesBuffer>> {
         if let Some(buf) = self.decoded.get(path) {
             return Ok(buf.clone());
         }
-        let bytes = afs::read(path).await?;
+        let bytes = fs::read(path)?;
         let buffer = decode_bytes(bytes)?;
         let arc = Arc::new(buffer);
         self.decoded.insert(path.to_path_buf(), arc.clone());
@@ -76,17 +77,17 @@ impl Audio {
     }
 }
 
-/// 异步音频循环：预加载与播放
+/// 音频循环：预加载与播放
 ///
 /// - 从 `rx` 接收预加载或播放请求
 /// - 预加载期间每秒输出一次 `已加载/总数`
 /// - 完成后向 `ready_tx` 发送 `PreloadFinished`
-pub async fn run_audio_loop(mut rx: mpsc::Receiver<Msg>, ready_tx: mpsc::Sender<Event>) {
+pub fn run_audio_loop(mut rx: mpsc::Receiver<Msg>, ready_tx: mpsc::Sender<Event>) {
     let mut audio = match Audio::new() {
         Ok(a) => a,
         Err(_) => return,
     };
-    while let Some(msg) = rx.recv().await {
+    while let Some(msg) = rx.blocking_recv() {
         match msg {
             Msg::PreloadAll { files } => {
                 let total = files.len() as u32;
@@ -94,10 +95,9 @@ pub async fn run_audio_loop(mut rx: mpsc::Receiver<Msg>, ready_tx: mpsc::Sender<
                 let done = Arc::new(AtomicBool::new(false));
                 let loaded_for_log = loaded.clone();
                 let done_for_log = done.clone();
-                let logger = tokio::spawn(async move {
-                    let mut ticker = tokio::time::interval(Duration::from_secs(1));
+                let logger = thread::spawn(move || {
                     loop {
-                        ticker.tick().await;
+                        thread::sleep(Duration::from_secs(1));
                         let c = loaded_for_log.load(Ordering::Relaxed);
                         println!("音频预加载进度：{}/{}", c, total);
                         if done_for_log.load(Ordering::Relaxed) {
@@ -105,40 +105,79 @@ pub async fn run_audio_loop(mut rx: mpsc::Receiver<Msg>, ready_tx: mpsc::Sender<
                         }
                     }
                 });
-                let mut handles = Vec::with_capacity(files.len());
-                for path in files {
-                    let loaded_cl = loaded.clone();
-                    handles.push(tokio::spawn(async move {
-                        let bytes = match afs::read(&path).await {
-                            Ok(b) => b,
-                            Err(_) => {
-                                loaded_cl.fetch_add(1, Ordering::Relaxed);
-                                return (path, None);
-                            }
-                        };
-                        let buffer = match decode_bytes(bytes) {
-                            Ok(b) => b,
-                            Err(_) => {
-                                loaded_cl.fetch_add(1, Ordering::Relaxed);
-                                return (path, None);
-                            }
-                        };
-                        loaded_cl.fetch_add(1, Ordering::Relaxed);
-                        (path, Some(Arc::new(buffer)))
+
+                let (work_tx, work_rx) = std::sync::mpsc::channel::<PathBuf>();
+                let work_rx = Arc::new(Mutex::new(work_rx));
+                let (result_tx, result_rx) =
+                    std::sync::mpsc::channel::<(PathBuf, Option<Arc<SamplesBuffer>>)>();
+                let workers = thread::available_parallelism()
+                    .map(std::num::NonZero::get)
+                    .unwrap_or(1)
+                    .clamp(1, 8);
+
+                let mut handles = Vec::with_capacity(workers);
+                for _ in 0..workers {
+                    let work_rx = work_rx.clone();
+                    let result_tx = result_tx.clone();
+                    let loaded = loaded.clone();
+                    handles.push(thread::spawn(move || {
+                        loop {
+                            let path = {
+                                let Ok(work_rx) = work_rx.lock() else {
+                                    break;
+                                };
+                                match work_rx.recv() {
+                                    Ok(p) => p,
+                                    Err(_) => break,
+                                }
+                            };
+                            let bytes = match fs::read(&path) {
+                                Ok(b) => b,
+                                Err(_) => {
+                                    loaded.fetch_add(1, Ordering::Relaxed);
+                                    let _ = result_tx.send((path, None));
+                                    continue;
+                                }
+                            };
+                            let buffer = match decode_bytes(bytes) {
+                                Ok(b) => b,
+                                Err(_) => {
+                                    loaded.fetch_add(1, Ordering::Relaxed);
+                                    let _ = result_tx.send((path, None));
+                                    continue;
+                                }
+                            };
+                            loaded.fetch_add(1, Ordering::Relaxed);
+                            let _ = result_tx.send((path, Some(Arc::new(buffer))));
+                        }
                     }));
                 }
-                for h in handles {
-                    if let Ok((p, Some(buf))) = h.await {
+
+                for path in files {
+                    let _ = work_tx.send(path);
+                }
+                drop(work_tx);
+                drop(result_tx);
+
+                for _ in 0..total {
+                    let Ok((p, buf)) = result_rx.recv() else {
+                        break;
+                    };
+                    if let Some(buf) = buf {
                         audio.decoded.insert(p, buf);
                     }
                 }
+
+                for h in handles {
+                    let _ = h.join();
+                }
                 done.store(true, Ordering::Relaxed);
-                let _ = logger.await;
-                let _ = ready_tx.try_send(Event::PreloadFinished);
+                let _ = logger.join();
+                let _ = ready_tx.blocking_send(Event::PreloadFinished);
                 println!("音频预加载完成");
             }
             Msg::Play(path) => {
-                if let Ok(buf) = audio.cached_buffer(&path).await {
+                if let Ok(buf) = audio.cached_buffer(&path) {
                     audio.stream.mixer().add((*buf).clone());
                 }
             }
