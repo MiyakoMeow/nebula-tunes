@@ -19,8 +19,6 @@ use anyhow::Result;
 use bms_rs::bms::prelude::Key;
 use bytemuck::{Pod, Zeroable};
 #[cfg(not(target_arch = "wasm32"))]
-use clap::Parser;
-#[cfg(not(target_arch = "wasm32"))]
 use futures_lite::future;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -53,27 +51,16 @@ const fn key_to_lane(key: Key) -> Option<usize> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-#[derive(Parser)]
-/// 命令行参数
-struct ExecArgs {
-    #[arg(long)]
-    /// 指定要加载的 BMS 文件路径
-    bms_path: Option<PathBuf>,
-}
-
-#[cfg(not(target_arch = "wasm32"))]
 /// 运行 Nebula Tunes 主程序入口
 ///
 /// # Errors
 ///
 /// - 读取或解析系统配置失败
-/// - 解析命令行参数失败
 /// - 加载谱面与资源索引失败
 /// - winit/wgpu 初始化失败
-pub fn run() -> Result<()> {
+pub fn run(bms_path: Option<PathBuf>) -> Result<()> {
     let sys = load_sys(Path::new("config_sys.toml"))?;
-    let args = ExecArgs::parse();
-    let (pre_processor, pre_audio_paths, pre_bmp_paths) = if let Some(bms_path) = args.bms_path {
+    let (pre_processor, pre_audio_paths, pre_bmp_paths) = if let Some(bms_path) = bms_path {
         let (p, ap, bp) = future::block_on(chart::bms::load_bms_and_collect_paths(
             bms_path,
             sys.judge.visible_travel,
