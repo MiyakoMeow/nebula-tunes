@@ -18,7 +18,7 @@ use gametime::{TimeSpan, TimeStamp};
 
 use crate::loops::audio::{Event, Msg};
 use crate::loops::visual::{base_instances, build_instances_for_processor_with_state};
-use crate::loops::{ControlMsg, InputMsg, VisualMsg};
+use crate::loops::{BgaLayer as VisualBgaLayer, ControlMsg, InputMsg, VisualMsg};
 
 /// 判定配置参数
 pub struct JudgeParams {
@@ -178,10 +178,12 @@ pub fn run(
                         1 => {
                             state.combo = 0;
                             state.gauge = (state.gauge - 0.03).max(0.0);
+                            let _ = visual_tx.try_send(VisualMsg::BgaPoorTrigger);
                         }
                         _ => {
                             state.combo = 0;
                             state.gauge = (state.gauge - 0.05).max(0.0);
+                            let _ = visual_tx.try_send(VisualMsg::BgaPoorTrigger);
                         }
                     }
                 }
@@ -210,11 +212,21 @@ pub fn run(
                     continue;
                 };
             }
-            if let ChartEvent::BgaChange { layer: _, bmp_id } = ev.event()
+            if let ChartEvent::BgaChange { layer, bmp_id } = ev.event()
                 && let Some(bmp_id) = bmp_id.as_ref()
                 && let Some(path) = bmp_paths.get(bmp_id)
             {
-                let _ = visual_tx.try_send(VisualMsg::Bga(path.clone()));
+                let mapped_layer = match layer {
+                    BgaLayer::Base => VisualBgaLayer::Bga,
+                    BgaLayer::Overlay => VisualBgaLayer::Layer,
+                    BgaLayer::Overlay2 => VisualBgaLayer::Layer2,
+                    BgaLayer::Poor => VisualBgaLayer::Poor,
+                    _ => VisualBgaLayer::Bga,
+                };
+                let _ = visual_tx.try_send(VisualMsg::BgaChange {
+                    layer: mapped_layer,
+                    path: path.clone(),
+                });
             }
             if let ChartEvent::Bgm { wav_id } = ev.event()
                 && let Some(wav_id) = wav_id.as_ref()
