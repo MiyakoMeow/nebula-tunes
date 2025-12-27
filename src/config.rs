@@ -5,7 +5,14 @@ use std::time::Duration;
 
 use anyhow::Result;
 use serde::{Deserialize, Deserializer};
+
+#[cfg(not(target_arch = "wasm32"))]
 use winit::keyboard::KeyCode;
+
+/// WASM 目标上的按键代码占位类型（仅用于反序列化）
+#[cfg(target_arch = "wasm32")]
+#[derive(Deserialize, Clone)]
+pub struct KeyCode(pub String);
 
 /// 系统运行时配置
 #[derive(Deserialize, Clone)]
