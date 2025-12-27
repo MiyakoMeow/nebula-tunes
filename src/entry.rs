@@ -1,5 +1,57 @@
 //! 程序入口模块
 
-/// 视觉应用逻辑（不包含 winit 事件循环）
-pub(crate) mod visual_app;
 pub(crate) mod winit;
+
+use std::sync::mpsc;
+
+use crate::Instance;
+use crate::loops::{VisualMsg, visual};
+
+/// 视觉应用：负责驱动渲染器与处理视觉消息
+pub(crate) struct VisualApp {
+    /// 绑定到窗口表面的渲染器
+    window_renderer: visual::Renderer,
+    /// 视觉消息接收端
+    visual_rx: mpsc::Receiver<VisualMsg>,
+    /// 最新一帧的实例列表
+    latest_instances: Vec<Instance>,
+}
+
+impl VisualApp {
+    /// 创建视觉应用
+    pub(crate) fn new(
+        window_renderer: visual::Renderer,
+        visual_rx: mpsc::Receiver<VisualMsg>,
+    ) -> Self {
+        Self {
+            window_renderer,
+            visual_rx,
+            latest_instances: visual::base_instances(),
+        }
+    }
+
+    /// 处理窗口大小变化
+    pub(crate) fn resize(&mut self, width: u32, height: u32) {
+        self.window_renderer.resize(width, height);
+    }
+
+    /// 执行一次渲染：消费消息、更新资源并绘制
+    pub(crate) fn redraw(&mut self) {
+        loop {
+            match self.visual_rx.try_recv() {
+                Ok(msg) => match msg {
+                    VisualMsg::Instances(instances) => {
+                        self.latest_instances = instances;
+                    }
+                    VisualMsg::Bga(path) => {
+                        self.window_renderer.request_bga_decode(path);
+                    }
+                },
+                Err(mpsc::TryRecvError::Empty) => break,
+                Err(mpsc::TryRecvError::Disconnected) => break,
+            }
+        }
+
+        let _ = self.window_renderer.draw(&self.latest_instances);
+    }
+}

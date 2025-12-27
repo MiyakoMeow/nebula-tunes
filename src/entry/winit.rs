@@ -13,7 +13,7 @@ use winit::{
     window::WindowId,
 };
 
-use crate::entry::visual_app::VisualApp;
+use crate::entry::VisualApp;
 use crate::loops::{ControlMsg, InputMsg, VisualMsg, visual};
 
 /// 视觉应用状态
