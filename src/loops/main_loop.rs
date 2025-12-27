@@ -7,7 +7,7 @@
 use std::{
     collections::HashMap,
     path::PathBuf,
-    sync::mpsc,
+    sync::{Arc, mpsc},
     thread,
     time::{Duration, Instant},
 };
@@ -17,7 +17,9 @@ use bms_rs::chart_process::types::PlayheadEvent;
 use gametime::{TimeSpan, TimeStamp};
 
 use crate::loops::audio::{Event, Msg};
-use crate::loops::visual::{base_instances, build_instances_for_processor_with_state};
+use crate::loops::visual::{
+    BgaDecodeCache, base_instances, build_instances_for_processor_with_state, preload_bga_files,
+};
 use crate::loops::{BgaLayer as VisualBgaLayer, ControlMsg, InputMsg, VisualMsg};
 
 /// 判定配置参数
@@ -50,6 +52,7 @@ pub fn run(
     mut processor: Option<BmsProcessor>,
     audio_paths: HashMap<WavId, PathBuf>,
     bmp_paths: HashMap<BmpId, PathBuf>,
+    bga_cache: Arc<BgaDecodeCache>,
     control_rx: mpsc::Receiver<ControlMsg>,
     visual_tx: mpsc::SyncSender<VisualMsg>,
     input_rx: mpsc::Receiver<InputMsg>,
@@ -61,13 +64,18 @@ pub fn run(
         Ok(ControlMsg::Start) => {}
         Err(_) => return,
     }
-    // 预加载所有音频资源，并等待完成事件
     let files: Vec<PathBuf> = audio_paths.values().cloned().collect();
     let _ = audio_tx.send(Msg::PreloadAll { files });
+
+    let bmp_files: Vec<PathBuf> = bmp_paths.values().cloned().collect();
+    let bga_preload = thread::spawn(move || preload_bga_files(bga_cache, bmp_files));
+
     match audio_event_rx.recv() {
         Ok(Event::PreloadFinished) => {}
         Err(_) => return,
     }
+    let _ = bga_preload.join();
+
     if let Some(p) = processor.as_mut() {
         p.start_play(TimeStamp::now());
     }

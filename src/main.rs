@@ -9,7 +9,7 @@ mod loops;
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
-    sync::mpsc,
+    sync::{Arc, mpsc},
     thread,
 };
 
@@ -20,7 +20,7 @@ use clap::Parser;
 use futures_lite::future;
 
 use crate::config::load_sys;
-use crate::loops::{InputMsg, VisualMsg, audio, main_loop};
+use crate::loops::{InputMsg, VisualMsg, audio, main_loop, visual};
 
 #[derive(Parser)]
 /// 命令行参数
@@ -71,14 +71,17 @@ fn main() -> Result<()> {
     let (input_tx, input_rx) = mpsc::sync_channel::<InputMsg>(64);
     let (audio_tx, audio_rx) = mpsc::sync_channel::<audio::Msg>(64);
     let (audio_event_tx, audio_event_rx) = mpsc::sync_channel::<audio::Event>(1);
+    let bga_cache = Arc::new(visual::BgaDecodeCache::new());
     let _audio_thread = thread::spawn(move || {
         audio::run_audio_loop(audio_rx, audio_event_tx);
     });
+    let bga_cache_for_main = bga_cache.clone();
     let _main_thread = thread::spawn(move || {
         main_loop::run(
             pre_processor,
             pre_audio_paths,
             pre_bmp_paths,
+            bga_cache_for_main,
             control_rx,
             visual_tx,
             input_rx,
@@ -90,6 +93,6 @@ fn main() -> Result<()> {
             audio_event_rx,
         );
     });
-    entry::winit::run(visual_rx, control_tx, input_tx, sys.keys.lanes)?;
+    entry::winit::run(visual_rx, control_tx, input_tx, sys.keys.lanes, bga_cache)?;
     Ok(())
 }
