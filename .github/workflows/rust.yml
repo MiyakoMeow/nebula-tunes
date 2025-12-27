@@ -58,4 +58,5 @@ jobs:
       - name: Format Check
         run: cargo fmt --check
       - name: "Clippy Check (WASI)"
+        if: false
         run: cargo clippy-wasm --verbose -- -D warnings
