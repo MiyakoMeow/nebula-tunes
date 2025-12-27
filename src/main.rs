@@ -9,6 +9,7 @@ mod loops;
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
+    sync::mpsc,
     thread,
 };
 
@@ -18,8 +19,8 @@ use bms_rs::{bms::prelude::*, chart_process::prelude::*};
 use bytemuck::{Pod, Zeroable};
 use chardetng::EncodingDetector;
 use clap::Parser;
+use futures_lite::future;
 use gametime::TimeSpan;
-use tokio::sync::mpsc;
 use winit::event_loop::EventLoop;
 
 use crate::config::load_sys;
@@ -129,40 +130,44 @@ async fn load_bms_and_collect_paths(
     Ok((processor, audio_paths, bmp_paths))
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     let sys = load_sys(Path::new("config_sys.toml"))?;
     let args = ExecArgs::parse();
     let event_loop = EventLoop::new()?;
     let (pre_processor, pre_audio_paths, pre_bmp_paths) = if let Some(bms_path) = args.bms_path {
-        let (p, ap, bp) = load_bms_and_collect_paths(bms_path, sys.judge.visible_travel).await?;
+        let (p, ap, bp) = future::block_on(load_bms_and_collect_paths(
+            bms_path,
+            sys.judge.visible_travel,
+        ))?;
         (Some(p), ap, bp)
     } else {
         (None, HashMap::new(), HashMap::new())
     };
-    let (control_tx, control_rx) = mpsc::channel::<loops::ControlMsg>(1);
-    let (visual_tx, visual_rx) = mpsc::channel::<VisualMsg>(2);
-    let (input_tx, input_rx) = mpsc::channel::<InputMsg>(64);
-    let (audio_tx, audio_rx) = mpsc::channel::<audio::Msg>(64);
-    let (audio_event_tx, audio_event_rx) = mpsc::channel::<audio::Event>(1);
+    let (control_tx, control_rx) = mpsc::sync_channel::<loops::ControlMsg>(1);
+    let (visual_tx, visual_rx) = mpsc::sync_channel::<VisualMsg>(2);
+    let (input_tx, input_rx) = mpsc::sync_channel::<InputMsg>(64);
+    let (audio_tx, audio_rx) = mpsc::sync_channel::<audio::Msg>(64);
+    let (audio_event_tx, audio_event_rx) = mpsc::sync_channel::<audio::Event>(1);
     let _audio_thread = thread::spawn(move || {
         audio::run_audio_loop(audio_rx, audio_event_tx);
     });
-    let _main_handle = tokio::spawn(main_loop::run(
-        pre_processor,
-        pre_audio_paths,
-        pre_bmp_paths,
-        control_rx,
-        visual_tx,
-        input_rx,
-        main_loop::JudgeParams {
-            travel: sys.judge.visible_travel,
-            windows: sys.judge.windows(),
-        },
-        audio_tx,
-        audio_event_rx,
-    ));
-    let mut handler = visual::Handler::new(visual_rx, control_tx, input_tx, sys.keys.lanes.clone());
+    let _main_thread = thread::spawn(move || {
+        main_loop::run(
+            pre_processor,
+            pre_audio_paths,
+            pre_bmp_paths,
+            control_rx,
+            visual_tx,
+            input_rx,
+            main_loop::JudgeParams {
+                travel: sys.judge.visible_travel,
+                windows: sys.judge.windows(),
+            },
+            audio_tx,
+            audio_event_rx,
+        );
+    });
+    let mut handler = visual::Handler::new(visual_rx, control_tx, input_tx, sys.keys.lanes);
     event_loop.run_app(&mut handler)?;
     Ok(())
 }

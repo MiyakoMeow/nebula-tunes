@@ -11,6 +11,7 @@ use std::{
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU32, Ordering},
+        mpsc,
     },
     thread,
     time::Duration,
@@ -18,7 +19,6 @@ use std::{
 
 use anyhow::Result;
 use rodio::{Source, buffer::SamplesBuffer, decoder::Decoder, stream::OutputStream};
-use tokio::sync::mpsc;
 
 /// 将原始字节数据解码为可播放的采样缓冲
 fn decode_bytes(bytes: Vec<u8>) -> Result<SamplesBuffer> {
@@ -82,12 +82,12 @@ impl Audio {
 /// - 从 `rx` 接收预加载或播放请求
 /// - 预加载期间每秒输出一次 `已加载/总数`
 /// - 完成后向 `ready_tx` 发送 `PreloadFinished`
-pub fn run_audio_loop(mut rx: mpsc::Receiver<Msg>, ready_tx: mpsc::Sender<Event>) {
+pub fn run_audio_loop(rx: mpsc::Receiver<Msg>, ready_tx: mpsc::SyncSender<Event>) {
     let mut audio = match Audio::new() {
         Ok(a) => a,
         Err(_) => return,
     };
-    while let Some(msg) = rx.blocking_recv() {
+    while let Ok(msg) = rx.recv() {
         match msg {
             Msg::PreloadAll { files } => {
                 let total = files.len() as u32;
@@ -173,7 +173,7 @@ pub fn run_audio_loop(mut rx: mpsc::Receiver<Msg>, ready_tx: mpsc::Sender<Event>
                 }
                 done.store(true, Ordering::Relaxed);
                 let _ = logger.join();
-                let _ = ready_tx.blocking_send(Event::PreloadFinished);
+                let _ = ready_tx.send(Event::PreloadFinished);
                 println!("音频预加载完成");
             }
             Msg::Play(path) => {

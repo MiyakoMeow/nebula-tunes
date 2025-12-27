@@ -9,9 +9,13 @@ mod bga;
 /// 音符与轨道实例构建
 mod note;
 pub use note::{base_instances, build_instances_for_processor_with_state};
-use std::{collections::HashMap, path::Path};
-use tokio::sync::mpsc;
+use std::{collections::HashMap, path::Path, sync::mpsc};
 
+use anyhow::Result;
+use bytemuck::{Pod, Zeroable};
+use wgpu::util::DeviceExt;
+use winit::event::ElementState;
+use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::{
     application::ApplicationHandler, dpi::LogicalSize, event::WindowEvent,
     event_loop::ActiveEventLoop, window::WindowId,
@@ -19,12 +23,6 @@ use winit::{
 
 use crate::Instance;
 use crate::loops::{ControlMsg, InputMsg, VisualMsg};
-
-use anyhow::Result;
-use bytemuck::{Pod, Zeroable};
-use wgpu::util::DeviceExt;
-use winit::event::ElementState;
-use winit::keyboard::{KeyCode, PhysicalKey};
 
 /// 视觉应用状态
 pub struct App {
@@ -51,9 +49,9 @@ pub struct Handler {
     /// 视觉消息接收端
     pub visual_rx: Option<mpsc::Receiver<VisualMsg>>,
     /// 控制消息发送端
-    pub control_tx: mpsc::Sender<ControlMsg>,
+    pub control_tx: mpsc::SyncSender<ControlMsg>,
     /// 输入消息发送端
-    pub input_tx: mpsc::Sender<InputMsg>,
+    pub input_tx: mpsc::SyncSender<InputMsg>,
     /// 键位到轨道索引映射
     key_map: HashMap<KeyCode, usize>,
 }
@@ -62,8 +60,8 @@ impl Handler {
     /// 创建视觉事件处理器并建立键位映射
     pub fn new(
         visual_rx: mpsc::Receiver<VisualMsg>,
-        control_tx: mpsc::Sender<ControlMsg>,
-        input_tx: mpsc::Sender<InputMsg>,
+        control_tx: mpsc::SyncSender<ControlMsg>,
+        input_tx: mpsc::SyncSender<InputMsg>,
         key_codes: Vec<KeyCode>,
     ) -> Self {
         let mut map = HashMap::new();
@@ -488,8 +486,8 @@ impl ApplicationHandler for Handler {
                                     let _ = renderer.update_bga_image_from_path(&path);
                                 }
                             },
-                            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
-                            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => break,
+                            Err(mpsc::TryRecvError::Empty) => break,
+                            Err(mpsc::TryRecvError::Disconnected) => break,
                         }
                     }
                     let _ = renderer.draw(&app.latest_instances);

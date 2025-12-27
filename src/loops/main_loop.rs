@@ -4,12 +4,17 @@
 //! - 将音频事件通过通道分发给音频循环
 //! - 构建视觉实例列表并发送给视觉循环
 
-use std::{collections::HashMap, path::PathBuf, time::Duration};
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    sync::mpsc,
+    thread,
+    time::{Duration, Instant},
+};
 
 use bms_rs::chart_process::prelude::*;
 use bms_rs::chart_process::types::PlayheadEvent;
 use gametime::{TimeSpan, TimeStamp};
-use tokio::sync::mpsc;
 
 use crate::loops::audio::{Event, Msg};
 use crate::loops::visual::{base_instances, build_instances_for_processor_with_state};
@@ -41,27 +46,27 @@ struct GameState {
 /// - `visual_tx`：视觉实例帧发送端
 /// - `audio_tx`：音频播放请求发送端
 #[allow(clippy::too_many_arguments)]
-pub async fn run(
+pub fn run(
     mut processor: Option<BmsProcessor>,
     audio_paths: HashMap<WavId, PathBuf>,
     bmp_paths: HashMap<BmpId, PathBuf>,
-    mut control_rx: mpsc::Receiver<ControlMsg>,
-    visual_tx: mpsc::Sender<VisualMsg>,
-    mut input_rx: mpsc::Receiver<InputMsg>,
+    control_rx: mpsc::Receiver<ControlMsg>,
+    visual_tx: mpsc::SyncSender<VisualMsg>,
+    input_rx: mpsc::Receiver<InputMsg>,
     judge: JudgeParams,
-    audio_tx: mpsc::Sender<Msg>,
-    mut audio_event_rx: mpsc::Receiver<Event>,
+    audio_tx: mpsc::SyncSender<Msg>,
+    audio_event_rx: mpsc::Receiver<Event>,
 ) {
-    match control_rx.recv().await {
-        Some(ControlMsg::Start) => {}
-        None => return,
+    match control_rx.recv() {
+        Ok(ControlMsg::Start) => {}
+        Err(_) => return,
     }
     // 预加载所有音频资源，并等待完成事件
     let files: Vec<PathBuf> = audio_paths.values().cloned().collect();
-    let _ = audio_tx.send(Msg::PreloadAll { files }).await;
-    match audio_event_rx.recv().await {
-        Some(Event::PreloadFinished) => {}
-        None => return,
+    let _ = audio_tx.send(Msg::PreloadAll { files });
+    match audio_event_rx.recv() {
+        Ok(Event::PreloadFinished) => {}
+        Err(_) => return,
     }
     if let Some(p) = processor.as_mut() {
         p.start_play(TimeStamp::now());
@@ -73,9 +78,21 @@ pub async fn run(
     };
     let mut last_log_sec: u64 = 0;
     let mut audio_plays_this_sec: u32 = 0;
-    let mut ticker = tokio::time::interval(Duration::from_millis(16));
+    let tick = Duration::from_millis(16);
+    let mut next_tick = Instant::now();
     loop {
-        ticker.tick().await;
+        let Some(t) = next_tick.checked_add(tick) else {
+            next_tick = Instant::now();
+            continue;
+        };
+        next_tick = t;
+        let now_instant = Instant::now();
+        if let Some(wait) = next_tick.checked_duration_since(now_instant) {
+            thread::sleep(wait);
+        } else {
+            next_tick = now_instant;
+        }
+
         let now = TimeStamp::now();
         let Some(p) = processor.as_mut() else {
             let _ = visual_tx.try_send(VisualMsg::Instances(base_instances()));
@@ -173,8 +190,8 @@ pub async fn run(
                         *flag = false;
                     }
                 }
-                Err(mpsc::error::TryRecvError::Empty) => break,
-                Err(mpsc::error::TryRecvError::Disconnected) => break,
+                Err(mpsc::TryRecvError::Empty) => break,
+                Err(mpsc::TryRecvError::Disconnected) => break,
             }
         }
         let events: Vec<PlayheadEvent> = p.update(now).collect();
