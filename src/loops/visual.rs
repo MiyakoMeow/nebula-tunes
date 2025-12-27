@@ -9,9 +9,11 @@ mod note;
 pub use note::{base_instances, build_instances_for_processor_with_state};
 
 use std::{
+    collections::HashMap,
     path::PathBuf,
     sync::mpsc,
     thread::{self, JoinHandle},
+    time::{Duration, Instant},
 };
 
 use anyhow::Result;
@@ -19,6 +21,7 @@ use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 
 use crate::Instance;
+use crate::loops::BgaLayer;
 
 #[repr(C)]
 #[derive(Clone, Copy, Zeroable, Pod)]
@@ -53,15 +56,17 @@ pub struct Renderer {
     /// BGA 渲染器
     bga: bga::BgaRenderer,
     /// BGA 解码请求发送端（发送图片路径）
-    bga_decode_tx: Option<mpsc::Sender<PathBuf>>,
+    bga_decode_tx: Option<mpsc::Sender<(BgaLayer, PathBuf)>>,
     /// BGA 解码结果接收端（rgba, w, h）
-    bga_decoded_rx: mpsc::Receiver<(Vec<u8>, u32, u32)>,
+    bga_decoded_rx: mpsc::Receiver<(BgaLayer, Vec<u8>, u32, u32)>,
     /// BGA 解码线程句柄
     bga_decode_thread: Option<JoinHandle<()>>,
     /// 三角形索引数量
     index_count: u32,
     /// 逻辑屏幕尺寸
     logical_size: [f32; 2],
+    /// POOR 图层可见到的时间点（到期自动隐藏）
+    poor_until: Option<Instant>,
 }
 
 impl Renderer {
@@ -185,33 +190,41 @@ impl Renderer {
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let bga = bga::BgaRenderer::new(&device, format);
+        let bga = bga::BgaRenderer::new(&device, &queue, &screen_buffer, format);
         let logical_size = [config.width as f32, config.height as f32];
 
-        let (bga_decode_tx, bga_decode_rx) = mpsc::channel::<PathBuf>();
-        let (bga_decoded_tx, bga_decoded_rx) = mpsc::channel::<(Vec<u8>, u32, u32)>();
+        let (bga_decode_tx, bga_decode_rx) = mpsc::channel::<(BgaLayer, PathBuf)>();
+        let (bga_decoded_tx, bga_decoded_rx) = mpsc::channel::<(BgaLayer, Vec<u8>, u32, u32)>();
         let bga_decode_thread = thread::spawn(move || {
             loop {
-                let Ok(mut path) = bga_decode_rx.recv() else {
+                let Ok((mut layer, mut path)) = bga_decode_rx.recv() else {
                     break;
                 };
+                let mut latest: HashMap<BgaLayer, PathBuf> = HashMap::new();
+                latest.insert(layer, path);
                 loop {
                     match bga_decode_rx.try_recv() {
-                        Ok(new_path) => path = new_path,
+                        Ok((new_layer, new_path)) => {
+                            layer = new_layer;
+                            path = new_path;
+                            latest.insert(layer, path.clone());
+                        }
                         Err(mpsc::TryRecvError::Empty) => break,
                         Err(mpsc::TryRecvError::Disconnected) => return,
                     }
                 }
-                let decoded = (|| -> Option<(Vec<u8>, u32, u32)> {
-                    let bytes = std::fs::read(path).ok()?;
-                    let img = image::load_from_memory(&bytes).ok()?;
-                    let rgba = img.to_rgba8();
-                    let w = rgba.width();
-                    let h = rgba.height();
-                    Some((rgba.into_raw(), w, h))
-                })();
-                if let Some(decoded) = decoded {
-                    let _ = bga_decoded_tx.send(decoded);
+                for (latest_layer, latest_path) in latest {
+                    let decoded = (|| -> Option<(Vec<u8>, u32, u32)> {
+                        let bytes = std::fs::read(latest_path).ok()?;
+                        let img = image::load_from_memory(&bytes).ok()?;
+                        let rgba = img.to_rgba8();
+                        let w = rgba.width();
+                        let h = rgba.height();
+                        Some((rgba.into_raw(), w, h))
+                    })();
+                    if let Some((rgba, w, h)) = decoded {
+                        let _ = bga_decoded_tx.send((latest_layer, rgba, w, h));
+                    }
                 }
             }
         });
@@ -233,6 +246,7 @@ impl Renderer {
             bga_decode_thread: Some(bga_decode_thread),
             index_count: 6,
             logical_size,
+            poor_until: None,
         })
     }
 
@@ -240,8 +254,8 @@ impl Renderer {
     fn drain_bga_decoded(&mut self) {
         loop {
             match self.bga_decoded_rx.try_recv() {
-                Ok((rgba, w, h)) => {
-                    let _ = self.update_bga_image_from_rgba(rgba.as_slice(), w, h);
+                Ok((layer, rgba, w, h)) => {
+                    let _ = self.update_bga_image_from_rgba(layer, rgba.as_slice(), w, h);
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => break,
@@ -249,11 +263,18 @@ impl Renderer {
         }
     }
 
-    /// 请求解码指定路径的 BGA 图片（将自动合并重复请求）
-    pub fn request_bga_decode(&self, path: PathBuf) {
+    /// 请求解码指定图层的 BGA 图片（将自动合并重复请求）
+    pub fn request_bga_decode(&self, layer: BgaLayer, path: PathBuf) {
         if let Some(tx) = &self.bga_decode_tx {
-            let _ = tx.send(path);
+            let _ = tx.send((layer, path));
         }
+    }
+
+    /// 触发显示 POOR 图层（短暂显示后自动隐藏）
+    pub fn trigger_poor(&mut self) {
+        const POOR_VISIBLE_FOR: Duration = Duration::from_millis(200);
+        self.bga.set_layer_visible(BgaLayer::Poor, true);
+        self.poor_until = Instant::now().checked_add(POOR_VISIBLE_FOR);
     }
 
     /// 调整画布大小
@@ -277,8 +298,15 @@ impl Renderer {
 
     /// 绘制一帧可视实例
     pub fn draw(&mut self, instances: &[Instance]) -> Result<()> {
+        if let Some(until) = self.poor_until
+            && Instant::now() >= until
+        {
+            self.bga.set_layer_visible(BgaLayer::Poor, false);
+            self.poor_until = None;
+        }
         self.drain_bga_decoded();
         self.upload_screen_uniform();
+        self.bga.prepare(&self.queue);
         let frame = self.surface.get_current_texture()?;
         let view = frame
             .texture
@@ -321,10 +349,27 @@ impl Renderer {
         Ok(())
     }
 
-    /// 更新 BGA 图片（RGBA8，sRGB）
-    pub fn update_bga_image_from_rgba(&mut self, rgba: &[u8], w: u32, h: u32) -> Result<()> {
-        self.bga
-            .update_image_from_rgba(&self.device, &self.queue, &self.screen_buffer, rgba, w, h)
+    /// 更新指定图层的 BGA 图片（RGBA8，sRGB）
+    pub fn update_bga_image_from_rgba(
+        &mut self,
+        layer: BgaLayer,
+        rgba: &[u8],
+        w: u32,
+        h: u32,
+    ) -> Result<()> {
+        self.bga.update_layer_image(
+            layer,
+            bga::UploadCtx {
+                device: &self.device,
+                queue: &self.queue,
+                screen_buffer: &self.screen_buffer,
+            },
+            bga::RgbaImage {
+                rgba,
+                width: w,
+                height: h,
+            },
+        )
     }
     /// 处理窗口尺寸变化
     pub fn resize(&mut self, width: u32, height: u32) {

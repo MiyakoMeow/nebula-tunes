@@ -25,10 +25,30 @@ pub enum InputMsg {
     KeyUp(usize),
 }
 
+/// BGA 图层类型
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum BgaLayer {
+    /// BGA 主图层
+    Bga,
+    /// LAYER 叠加图层
+    Layer,
+    /// LAYER2 叠加图层
+    Layer2,
+    /// POOR 图层（默认隐藏，通过事件触发）
+    Poor,
+}
+
 /// 视觉循环消息
 pub enum VisualMsg {
     /// 更新实例列表
     Instances(Vec<crate::Instance>),
-    /// 切换BGA图片
-    Bga(PathBuf),
+    /// 切换指定图层的 BGA 图片
+    BgaChange {
+        /// 目标图层
+        layer: BgaLayer,
+        /// 图片路径
+        path: PathBuf,
+    },
+    /// 触发显示 POOR 图层
+    BgaPoorTrigger,
 }

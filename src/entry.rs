@@ -43,8 +43,11 @@ impl VisualApp {
                     VisualMsg::Instances(instances) => {
                         self.latest_instances = instances;
                     }
-                    VisualMsg::Bga(path) => {
-                        self.window_renderer.request_bga_decode(path);
+                    VisualMsg::BgaChange { layer, path } => {
+                        self.window_renderer.request_bga_decode(layer, path);
+                    }
+                    VisualMsg::BgaPoorTrigger => {
+                        self.window_renderer.trigger_poor();
                     }
                 },
                 Err(mpsc::TryRecvError::Empty) => break,
