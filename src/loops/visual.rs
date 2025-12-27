@@ -4,9 +4,7 @@
 //! - 在 `RedrawRequested` 非阻塞接收最新帧并渲染
 //! - 在 `about_to_wait` 请求重绘以维持刷新
 
-/// BGA 渲染子模块
 mod bga;
-/// 音符与轨道实例构建
 mod note;
 pub use note::{base_instances, build_instances_for_processor_with_state};
 use std::path::Path;
