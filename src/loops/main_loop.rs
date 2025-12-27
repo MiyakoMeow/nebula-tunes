@@ -5,13 +5,9 @@
 //! - 构建视觉实例列表并发送给视觉循环
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     path::PathBuf,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicU32, Ordering},
-        mpsc,
-    },
+    sync::{Arc, mpsc},
     thread,
     time::{Duration, Instant},
 };
@@ -22,94 +18,9 @@ use gametime::{TimeSpan, TimeStamp};
 
 use crate::loops::audio::{Event, Msg};
 use crate::loops::visual::{
-    BgaDecodeCache, base_instances, build_instances_for_processor_with_state,
+    BgaDecodeCache, base_instances, build_instances_for_processor_with_state, preload_bga_files,
 };
 use crate::loops::{BgaLayer as VisualBgaLayer, ControlMsg, InputMsg, VisualMsg};
-
-/// 预先解码所有 BGA 图片到缓存，并每秒输出一次进度
-fn preload_bga_files(cache: Arc<BgaDecodeCache>, files: Vec<PathBuf>) {
-    let mut unique = HashSet::new();
-    for p in files {
-        unique.insert(p);
-    }
-    let paths: Vec<PathBuf> = unique.into_iter().collect();
-    let total = paths.len() as u32;
-    if total == 0 {
-        println!("BGA预加载进度：0/0");
-        println!("BGA预加载完成");
-        return;
-    }
-    let loaded = Arc::new(AtomicU32::new(0));
-    let done = Arc::new(AtomicBool::new(false));
-
-    let loaded_for_log = loaded.clone();
-    let done_for_log = done.clone();
-    let logger = thread::spawn(move || {
-        loop {
-            thread::sleep(Duration::from_secs(1));
-            let c = loaded_for_log.load(Ordering::Relaxed);
-            println!("BGA预加载进度：{}/{}", c, total);
-            if done_for_log.load(Ordering::Relaxed) {
-                break;
-            }
-        }
-    });
-
-    let (work_tx, work_rx) = std::sync::mpsc::channel::<PathBuf>();
-    let work_rx = Arc::new(std::sync::Mutex::new(work_rx));
-    let workers = thread::available_parallelism()
-        .map(std::num::NonZero::get)
-        .unwrap_or(1)
-        .clamp(1, 8);
-
-    let mut handles = Vec::with_capacity(workers);
-    for _ in 0..workers {
-        let work_rx = work_rx.clone();
-        let cache = cache.clone();
-        let loaded = loaded.clone();
-        handles.push(thread::spawn(move || {
-            loop {
-                let path = {
-                    let Ok(work_rx) = work_rx.lock() else {
-                        break;
-                    };
-                    match work_rx.recv() {
-                        Ok(p) => p,
-                        Err(_) => break,
-                    }
-                };
-                if cache.get(path.as_path()).is_some() {
-                    loaded.fetch_add(1, Ordering::Relaxed);
-                    continue;
-                }
-                let decoded = (|| -> Option<(Vec<u8>, u32, u32)> {
-                    let bytes = std::fs::read(&path).ok()?;
-                    let img = image::load_from_memory(&bytes).ok()?;
-                    let rgba = img.to_rgba8();
-                    let w = rgba.width();
-                    let h = rgba.height();
-                    Some((rgba.into_raw(), w, h))
-                })();
-                if let Some((rgba, w, h)) = decoded {
-                    let _ = cache.insert(path, rgba, w, h);
-                }
-                loaded.fetch_add(1, Ordering::Relaxed);
-            }
-        }));
-    }
-
-    for path in paths {
-        let _ = work_tx.send(path);
-    }
-    drop(work_tx);
-
-    for h in handles {
-        let _ = h.join();
-    }
-    done.store(true, Ordering::Relaxed);
-    let _ = logger.join();
-    println!("BGA预加载完成");
-}
 
 /// 判定配置参数
 pub struct JudgeParams {

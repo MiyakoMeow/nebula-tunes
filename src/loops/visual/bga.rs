@@ -4,7 +4,18 @@
 //! - 根据屏幕尺寸居中缩放绘制单张图片
 //! - 与主矩形渲染管线复用统一缓冲
 
-use std::borrow::Cow;
+use std::{
+    borrow::Cow,
+    collections::{HashMap, HashSet},
+    fs,
+    path::{Path, PathBuf},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicU32, Ordering},
+    },
+    thread,
+    time::Duration,
+};
 
 use anyhow::Result;
 use bytemuck::{Pod, Zeroable};
@@ -12,6 +23,151 @@ use image::{ImageBuffer, Luma};
 use imageproc::region_labelling::{Connectivity, connected_components};
 
 use crate::loops::BgaLayer;
+
+/// 已解码的 BGA 图片数据
+pub struct BgaDecodedImage {
+    /// RGBA8 像素缓冲
+    pub rgba: Vec<u8>,
+    /// 宽度
+    pub width: u32,
+    /// 高度
+    pub height: u32,
+}
+
+/// BGA 图片解码缓存（跨线程共享）
+pub struct BgaDecodeCache {
+    /// 路径到已解码图片的映射
+    inner: Mutex<HashMap<PathBuf, Arc<BgaDecodedImage>>>,
+}
+
+impl BgaDecodeCache {
+    /// 创建空缓存
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            inner: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// 获取指定路径的已解码图片
+    #[must_use]
+    pub fn get(&self, path: &Path) -> Option<Arc<BgaDecodedImage>> {
+        self.inner.lock().ok()?.get(path).cloned()
+    }
+
+    /// 将图片写入缓存并返回共享引用
+    pub fn insert(
+        &self,
+        path: PathBuf,
+        rgba: Vec<u8>,
+        width: u32,
+        height: u32,
+    ) -> Arc<BgaDecodedImage> {
+        let decoded = Arc::new(BgaDecodedImage {
+            rgba,
+            width,
+            height,
+        });
+        if let Ok(mut map) = self.inner.lock() {
+            map.insert(path, decoded.clone());
+        }
+        decoded
+    }
+}
+
+/// 从文件路径读取并解码图片为 RGBA8 缓冲
+fn decode_image(path: &Path) -> Option<(Vec<u8>, u32, u32)> {
+    let bytes = fs::read(path).ok()?;
+    let img = image::load_from_memory(&bytes).ok()?;
+    let rgba = img.to_rgba8();
+    let w = rgba.width();
+    let h = rgba.height();
+    Some((rgba.into_raw(), w, h))
+}
+
+/// 解码图片并写入缓存（缓存命中则直接返回）
+pub(crate) fn decode_and_cache(
+    cache: &BgaDecodeCache,
+    path: PathBuf,
+) -> Option<Arc<BgaDecodedImage>> {
+    if let Some(decoded) = cache.get(path.as_path()) {
+        return Some(decoded);
+    }
+    let (rgba, w, h) = decode_image(path.as_path())?;
+    Some(cache.insert(path, rgba, w, h))
+}
+
+/// 预先解码所有 BGA 图片到缓存，并每秒输出一次进度
+pub fn preload_bga_files(cache: Arc<BgaDecodeCache>, files: Vec<PathBuf>) {
+    let paths: Vec<PathBuf> = files
+        .into_iter()
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    let total = paths.len() as u32;
+    if total == 0 {
+        println!("BGA预加载进度：0/0");
+        println!("BGA预加载完成");
+        return;
+    }
+
+    let loaded = Arc::new(AtomicU32::new(0));
+    let done = Arc::new(AtomicBool::new(false));
+
+    let loaded_for_log = loaded.clone();
+    let done_for_log = done.clone();
+    let logger = thread::spawn(move || {
+        loop {
+            thread::sleep(Duration::from_secs(1));
+            let c = loaded_for_log.load(Ordering::Relaxed);
+            println!("BGA预加载进度：{}/{}", c, total);
+            if done_for_log.load(Ordering::Relaxed) {
+                break;
+            }
+        }
+    });
+
+    let (work_tx, work_rx) = std::sync::mpsc::channel::<PathBuf>();
+    let work_rx = Arc::new(std::sync::Mutex::new(work_rx));
+    let workers = thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1)
+        .clamp(1, 8);
+
+    let mut handles = Vec::with_capacity(workers);
+    for _ in 0..workers {
+        let work_rx = work_rx.clone();
+        let cache = cache.clone();
+        let loaded = loaded.clone();
+        handles.push(thread::spawn(move || {
+            loop {
+                let path = {
+                    let Ok(work_rx) = work_rx.lock() else {
+                        break;
+                    };
+                    match work_rx.recv() {
+                        Ok(p) => p,
+                        Err(_) => break,
+                    }
+                };
+                let _ = decode_and_cache(cache.as_ref(), path);
+                loaded.fetch_add(1, Ordering::Relaxed);
+            }
+        }));
+    }
+
+    for path in paths {
+        let _ = work_tx.send(path);
+    }
+    drop(work_tx);
+
+    for h in handles {
+        let _ = h.join();
+    }
+    done.store(true, Ordering::Relaxed);
+    let _ = logger.join();
+    println!("BGA预加载完成");
+}
 
 /// 图片上传所需的 GPU 上下文
 pub(crate) struct UploadCtx<'a> {
