@@ -6,6 +6,8 @@
 
 use anyhow::Result;
 use bytemuck::{Pod, Zeroable};
+use image::{ImageBuffer, Luma};
+use imageproc::region_labelling::{Connectivity, connected_components};
 
 use crate::loops::BgaLayer;
 
@@ -327,6 +329,62 @@ impl BgaRenderer {
         ctx: UploadCtx<'_>,
         img: RgbaImage<'_>,
     ) -> Result<()> {
+        let mut rgba_buf;
+        let rgba = match layer {
+            BgaLayer::Layer | BgaLayer::Layer2 => {
+                rgba_buf = img.rgba.to_vec();
+                if img.width != 0 && img.height != 0 {
+                    let width_usize = img.width as usize;
+                    let mask = ImageBuffer::from_fn(img.width, img.height, |x, y| {
+                        let base = ((y as usize) * width_usize + (x as usize)) * 4;
+                        let is_black = rgba_buf
+                            .get(base..base + 4)
+                            .and_then(|px| <[u8; 4]>::try_from(px).ok())
+                            .is_some_and(|[r, g, b, a]| r == 0 && g == 0 && b == 0 && a != 0);
+                        Luma([u8::from(is_black)])
+                    });
+
+                    let labels = connected_components(&mask, Connectivity::Four, Luma([0u8]));
+                    let corners = [
+                        (0u32, 0u32),
+                        (img.width - 1, 0u32),
+                        (0u32, img.height - 1),
+                        (img.width - 1, img.height - 1),
+                    ];
+                    let mut targets = [0u32; 4];
+                    let mut targets_len = 0usize;
+                    for (x, y) in corners {
+                        let label = *labels.get_pixel(x, y).0.first().unwrap_or(&0);
+                        if label == 0 || targets.iter().take(targets_len).any(|v| *v == label) {
+                            continue;
+                        }
+                        let Some(slot) = targets.get_mut(targets_len) else {
+                            break;
+                        };
+                        *slot = label;
+                        targets_len += 1;
+                    }
+
+                    if targets_len != 0 {
+                        for (x, y, p) in labels.enumerate_pixels() {
+                            let label = *p.0.first().unwrap_or(&0);
+                            if label == 0 || !targets.iter().take(targets_len).any(|v| *v == label)
+                            {
+                                continue;
+                            }
+
+                            let base = ((y as usize) * width_usize + (x as usize)) * 4;
+                            if let Some(px) = rgba_buf.get_mut(base..base + 4) {
+                                px.copy_from_slice(&[0, 0, 0, 0]);
+                            }
+                        }
+                    }
+                }
+                rgba_buf.as_slice()
+            }
+            BgaLayer::Bga | BgaLayer::Poor => img.rgba,
+        };
+
         let texture = ctx.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("bga-texture"),
             size: wgpu::Extent3d {
@@ -348,7 +406,7 @@ impl BgaRenderer {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            img.rgba,
+            rgba,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(4 * img.width),
