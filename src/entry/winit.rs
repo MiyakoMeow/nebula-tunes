@@ -1,6 +1,9 @@
 //! winit 窗口与事件循环入口
 
-use std::{collections::HashMap, sync::mpsc};
+use std::{
+    collections::HashMap,
+    sync::{Arc, mpsc},
+};
 
 use anyhow::Result;
 use futures_lite::future;
@@ -36,6 +39,8 @@ struct Handler {
     input_tx: mpsc::SyncSender<InputMsg>,
     /// 键位到轨道索引映射
     key_map: HashMap<KeyCode, usize>,
+    /// BGA 解码缓存（用于创建渲染器并复用预加载结果）
+    bga_cache: Arc<visual::BgaDecodeCache>,
 }
 
 impl Handler {
@@ -45,6 +50,7 @@ impl Handler {
         control_tx: mpsc::SyncSender<ControlMsg>,
         input_tx: mpsc::SyncSender<InputMsg>,
         key_codes: Vec<KeyCode>,
+        bga_cache: Arc<visual::BgaDecodeCache>,
     ) -> Self {
         let mut map = HashMap::new();
         for (i, code) in key_codes.into_iter().enumerate().take(8) {
@@ -56,6 +62,7 @@ impl Handler {
             control_tx,
             input_tx,
             key_map: map,
+            bga_cache,
         }
     }
 }
@@ -115,7 +122,7 @@ impl ApplicationHandler for Handler {
                 view_formats: vec![],
                 desired_maximum_frame_latency: 2,
             };
-            visual::Renderer::new(surface, device, queue, config)
+            visual::Renderer::new(surface, device, queue, config, self.bga_cache.clone())
         })() {
             Ok(r) => r,
             Err(_) => return,
@@ -179,9 +186,10 @@ pub(crate) fn run(
     control_tx: mpsc::SyncSender<ControlMsg>,
     input_tx: mpsc::SyncSender<InputMsg>,
     key_codes: Vec<KeyCode>,
+    bga_cache: Arc<visual::BgaDecodeCache>,
 ) -> Result<()> {
     let event_loop = EventLoop::new()?;
-    let mut handler = Handler::new(visual_rx, control_tx, input_tx, key_codes);
+    let mut handler = Handler::new(visual_rx, control_tx, input_tx, key_codes, bga_cache);
     event_loop.run_app(&mut handler)?;
     Ok(())
 }

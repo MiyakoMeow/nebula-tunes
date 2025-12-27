@@ -10,8 +10,8 @@ pub use note::{base_instances, build_instances_for_processor_with_state};
 
 use std::{
     collections::HashMap,
-    path::PathBuf,
-    sync::mpsc,
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex, mpsc},
     thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
@@ -22,6 +22,57 @@ use wgpu::util::DeviceExt;
 
 use crate::Instance;
 use crate::loops::BgaLayer;
+
+/// 已解码的 BGA 图片数据
+pub struct BgaDecodedImage {
+    /// RGBA8 像素缓冲
+    pub rgba: Vec<u8>,
+    /// 宽度
+    pub width: u32,
+    /// 高度
+    pub height: u32,
+}
+
+/// BGA 图片解码缓存（跨线程共享）
+pub struct BgaDecodeCache {
+    /// 路径到已解码图片的映射
+    inner: Mutex<HashMap<PathBuf, Arc<BgaDecodedImage>>>,
+}
+
+impl BgaDecodeCache {
+    /// 创建空缓存
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            inner: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// 获取指定路径的已解码图片
+    #[must_use]
+    pub fn get(&self, path: &Path) -> Option<Arc<BgaDecodedImage>> {
+        self.inner.lock().ok()?.get(path).cloned()
+    }
+
+    /// 将图片写入缓存并返回共享引用
+    pub fn insert(
+        &self,
+        path: PathBuf,
+        rgba: Vec<u8>,
+        width: u32,
+        height: u32,
+    ) -> Arc<BgaDecodedImage> {
+        let decoded = Arc::new(BgaDecodedImage {
+            rgba,
+            width,
+            height,
+        });
+        if let Ok(mut map) = self.inner.lock() {
+            map.insert(path, decoded.clone());
+        }
+        decoded
+    }
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, Zeroable, Pod)]
@@ -57,8 +108,8 @@ pub struct Renderer {
     bga: bga::BgaRenderer,
     /// BGA 解码请求发送端（发送图片路径）
     bga_decode_tx: Option<mpsc::Sender<(BgaLayer, PathBuf)>>,
-    /// BGA 解码结果接收端（rgba, w, h）
-    bga_decoded_rx: mpsc::Receiver<(BgaLayer, Vec<u8>, u32, u32)>,
+    /// BGA 解码结果接收端
+    bga_decoded_rx: mpsc::Receiver<(BgaLayer, Arc<BgaDecodedImage>)>,
     /// BGA 解码线程句柄
     bga_decode_thread: Option<JoinHandle<()>>,
     /// 三角形索引数量
@@ -76,6 +127,7 @@ impl Renderer {
         device: wgpu::Device,
         queue: wgpu::Queue,
         config: wgpu::SurfaceConfiguration,
+        bga_cache: Arc<BgaDecodeCache>,
     ) -> Result<Self> {
         let format = config.format;
         surface.configure(&device, &config);
@@ -194,7 +246,8 @@ impl Renderer {
         let logical_size = [config.width as f32, config.height as f32];
 
         let (bga_decode_tx, bga_decode_rx) = mpsc::channel::<(BgaLayer, PathBuf)>();
-        let (bga_decoded_tx, bga_decoded_rx) = mpsc::channel::<(BgaLayer, Vec<u8>, u32, u32)>();
+        let (bga_decoded_tx, bga_decoded_rx) = mpsc::channel::<(BgaLayer, Arc<BgaDecodedImage>)>();
+        let bga_cache_for_decode = bga_cache;
         let bga_decode_thread = thread::spawn(move || {
             loop {
                 let Ok((mut layer, mut path)) = bga_decode_rx.recv() else {
@@ -214,16 +267,20 @@ impl Renderer {
                     }
                 }
                 for (latest_layer, latest_path) in latest {
-                    let decoded = (|| -> Option<(Vec<u8>, u32, u32)> {
-                        let bytes = std::fs::read(latest_path).ok()?;
+                    if let Some(decoded) = bga_cache_for_decode.get(latest_path.as_path()) {
+                        let _ = bga_decoded_tx.send((latest_layer, decoded));
+                        continue;
+                    }
+                    let decoded = (|| -> Option<Arc<BgaDecodedImage>> {
+                        let bytes = std::fs::read(&latest_path).ok()?;
                         let img = image::load_from_memory(&bytes).ok()?;
                         let rgba = img.to_rgba8();
                         let w = rgba.width();
                         let h = rgba.height();
-                        Some((rgba.into_raw(), w, h))
+                        Some(bga_cache_for_decode.insert(latest_path, rgba.into_raw(), w, h))
                     })();
-                    if let Some((rgba, w, h)) = decoded {
-                        let _ = bga_decoded_tx.send((latest_layer, rgba, w, h));
+                    if let Some(decoded) = decoded {
+                        let _ = bga_decoded_tx.send((latest_layer, decoded));
                     }
                 }
             }
@@ -254,8 +311,13 @@ impl Renderer {
     fn drain_bga_decoded(&mut self) {
         loop {
             match self.bga_decoded_rx.try_recv() {
-                Ok((layer, rgba, w, h)) => {
-                    let _ = self.update_bga_image_from_rgba(layer, rgba.as_slice(), w, h);
+                Ok((layer, decoded)) => {
+                    let _ = self.update_bga_image_from_rgba(
+                        layer,
+                        decoded.rgba.as_slice(),
+                        decoded.width,
+                        decoded.height,
+                    );
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => break,
