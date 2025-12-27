@@ -322,6 +322,68 @@ impl BgaRenderer {
         }
     }
 
+    /// 去除背景（黑色背景转透明）
+    fn remove_background(rgba_buf: &mut [u8], width: u32, height: u32) {
+        let width_usize = width as usize;
+        let mask = ImageBuffer::from_fn(width, height, |x, y| {
+            let base = ((y as usize) * width_usize + (x as usize)) * 4;
+            let is_black = rgba_buf
+                .get(base..base + 4)
+                .and_then(|px| <[u8; 4]>::try_from(px).ok())
+                .is_some_and(|[r, g, b, a]| r == 0 && g == 0 && b == 0 && a != 0);
+            Luma([u8::from(is_black)])
+        });
+
+        let labels = connected_components(&mask, Connectivity::Four, Luma([0u8]));
+        let corners = [
+            (0u32, 0u32),
+            (width - 1, 0u32),
+            (0u32, height - 1),
+            (width - 1, height - 1),
+        ];
+        let mut targets = [0u32; 4];
+        let mut targets_len = 0usize;
+        for (x, y) in corners {
+            let label = *labels.get_pixel(x, y).0.first().unwrap_or(&0);
+            if label == 0 || targets.iter().take(targets_len).any(|v| *v == label) {
+                continue;
+            }
+            let Some(slot) = targets.get_mut(targets_len) else {
+                break;
+            };
+            *slot = label;
+            targets_len += 1;
+        }
+
+        if targets_len != 0 {
+            for (x, y, p) in labels.enumerate_pixels() {
+                let label = *p.0.first().unwrap_or(&0);
+                if label == 0 || !targets.iter().take(targets_len).any(|v| *v == label) {
+                    continue;
+                }
+
+                let base = ((y as usize) * width_usize + (x as usize)) * 4;
+                if let Some(px) = rgba_buf.get_mut(base..base + 4) {
+                    px.copy_from_slice(&[0, 0, 0, 0]);
+                }
+            }
+        }
+    }
+
+    /// 处理图层图片（如去除背景）
+    fn process_layer_image<'a>(layer: BgaLayer, img: &RgbaImage<'a>) -> std::borrow::Cow<'a, [u8]> {
+        match layer {
+            BgaLayer::Layer | BgaLayer::Layer2 => {
+                let mut rgba_buf = img.rgba.to_vec();
+                if img.width != 0 && img.height != 0 {
+                    Self::remove_background(&mut rgba_buf, img.width, img.height);
+                }
+                std::borrow::Cow::Owned(rgba_buf)
+            }
+            BgaLayer::Bga | BgaLayer::Poor => std::borrow::Cow::Borrowed(img.rgba),
+        }
+    }
+
     /// 更新指定图层的图片（RGBA8，sRGB）
     pub fn update_layer_image(
         &mut self,
@@ -329,61 +391,7 @@ impl BgaRenderer {
         ctx: UploadCtx<'_>,
         img: RgbaImage<'_>,
     ) -> Result<()> {
-        let mut rgba_buf;
-        let rgba = match layer {
-            BgaLayer::Layer | BgaLayer::Layer2 => {
-                rgba_buf = img.rgba.to_vec();
-                if img.width != 0 && img.height != 0 {
-                    let width_usize = img.width as usize;
-                    let mask = ImageBuffer::from_fn(img.width, img.height, |x, y| {
-                        let base = ((y as usize) * width_usize + (x as usize)) * 4;
-                        let is_black = rgba_buf
-                            .get(base..base + 4)
-                            .and_then(|px| <[u8; 4]>::try_from(px).ok())
-                            .is_some_and(|[r, g, b, a]| r == 0 && g == 0 && b == 0 && a != 0);
-                        Luma([u8::from(is_black)])
-                    });
-
-                    let labels = connected_components(&mask, Connectivity::Four, Luma([0u8]));
-                    let corners = [
-                        (0u32, 0u32),
-                        (img.width - 1, 0u32),
-                        (0u32, img.height - 1),
-                        (img.width - 1, img.height - 1),
-                    ];
-                    let mut targets = [0u32; 4];
-                    let mut targets_len = 0usize;
-                    for (x, y) in corners {
-                        let label = *labels.get_pixel(x, y).0.first().unwrap_or(&0);
-                        if label == 0 || targets.iter().take(targets_len).any(|v| *v == label) {
-                            continue;
-                        }
-                        let Some(slot) = targets.get_mut(targets_len) else {
-                            break;
-                        };
-                        *slot = label;
-                        targets_len += 1;
-                    }
-
-                    if targets_len != 0 {
-                        for (x, y, p) in labels.enumerate_pixels() {
-                            let label = *p.0.first().unwrap_or(&0);
-                            if label == 0 || !targets.iter().take(targets_len).any(|v| *v == label)
-                            {
-                                continue;
-                            }
-
-                            let base = ((y as usize) * width_usize + (x as usize)) * 4;
-                            if let Some(px) = rgba_buf.get_mut(base..base + 4) {
-                                px.copy_from_slice(&[0, 0, 0, 0]);
-                            }
-                        }
-                    }
-                }
-                rgba_buf.as_slice()
-            }
-            BgaLayer::Bga | BgaLayer::Poor => img.rgba,
-        };
+        let rgba = Self::process_layer_image(layer, &img);
 
         let texture = ctx.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("bga-texture"),
@@ -406,7 +414,7 @@ impl BgaRenderer {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            rgba,
+            &rgba,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(4 * img.width),
