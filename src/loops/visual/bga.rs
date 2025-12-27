@@ -5,7 +5,6 @@
 //! - 与主矩形渲染管线复用统一缓冲
 
 use anyhow::Result;
-use std::path::Path;
 
 /// 简易 BGA 渲染器：负责加载图片并绘制到屏幕
 pub struct BgaRenderer {
@@ -130,18 +129,16 @@ impl BgaRenderer {
         }
     }
 
-    /// 从路径读取图片并更新绑定组与实例
-    pub fn update_image_from_path(
+    /// 更新 BGA 图片（RGBA8，sRGB）
+    pub fn update_image_from_rgba(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         screen_buffer: &wgpu::Buffer,
-        path: &Path,
+        rgba: &[u8],
+        w: u32,
+        h: u32,
     ) -> Result<()> {
-        let bytes = std::fs::read(path)?;
-        let img = image::load_from_memory(&bytes)?;
-        let rgba = img.to_rgba8();
-        let (w, h) = (rgba.width(), rgba.height());
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("bga-texture"),
             size: wgpu::Extent3d {
@@ -163,7 +160,7 @@ impl BgaRenderer {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            &rgba,
+            rgba,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(4 * w),

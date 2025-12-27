@@ -7,7 +7,12 @@
 mod bga;
 mod note;
 pub use note::{base_instances, build_instances_for_processor_with_state};
-use std::path::Path;
+
+use std::{
+    path::PathBuf,
+    sync::mpsc,
+    thread::{self, JoinHandle},
+};
 
 use anyhow::Result;
 use bytemuck::{Pod, Zeroable};
@@ -47,6 +52,12 @@ pub struct Renderer {
     instance_buf: wgpu::Buffer,
     /// BGA 渲染器
     bga: bga::BgaRenderer,
+    /// BGA 解码请求发送端（发送图片路径）
+    bga_decode_tx: Option<mpsc::Sender<PathBuf>>,
+    /// BGA 解码结果接收端（rgba, w, h）
+    bga_decoded_rx: mpsc::Receiver<(Vec<u8>, u32, u32)>,
+    /// BGA 解码线程句柄
+    bga_decode_thread: Option<JoinHandle<()>>,
     /// 三角形索引数量
     index_count: u32,
     /// 逻辑屏幕尺寸
@@ -176,6 +187,35 @@ impl Renderer {
         });
         let bga = bga::BgaRenderer::new(&device, format);
         let logical_size = [config.width as f32, config.height as f32];
+
+        let (bga_decode_tx, bga_decode_rx) = mpsc::channel::<PathBuf>();
+        let (bga_decoded_tx, bga_decoded_rx) = mpsc::channel::<(Vec<u8>, u32, u32)>();
+        let bga_decode_thread = thread::spawn(move || {
+            loop {
+                let Ok(mut path) = bga_decode_rx.recv() else {
+                    break;
+                };
+                loop {
+                    match bga_decode_rx.try_recv() {
+                        Ok(new_path) => path = new_path,
+                        Err(mpsc::TryRecvError::Empty) => break,
+                        Err(mpsc::TryRecvError::Disconnected) => return,
+                    }
+                }
+                let decoded = (|| -> Option<(Vec<u8>, u32, u32)> {
+                    let bytes = std::fs::read(path).ok()?;
+                    let img = image::load_from_memory(&bytes).ok()?;
+                    let rgba = img.to_rgba8();
+                    let w = rgba.width();
+                    let h = rgba.height();
+                    Some((rgba.into_raw(), w, h))
+                })();
+                if let Some(decoded) = decoded {
+                    let _ = bga_decoded_tx.send(decoded);
+                }
+            }
+        });
+
         Ok(Self {
             surface,
             device,
@@ -188,9 +228,32 @@ impl Renderer {
             idx_buf,
             instance_buf,
             bga,
+            bga_decode_tx: Some(bga_decode_tx),
+            bga_decoded_rx,
+            bga_decode_thread: Some(bga_decode_thread),
             index_count: 6,
             logical_size,
         })
+    }
+
+    /// 非阻塞消费已完成的 BGA 解码结果，并将图片上传到 GPU
+    fn drain_bga_decoded(&mut self) {
+        loop {
+            match self.bga_decoded_rx.try_recv() {
+                Ok((rgba, w, h)) => {
+                    let _ = self.update_bga_image_from_rgba(rgba.as_slice(), w, h);
+                }
+                Err(mpsc::TryRecvError::Empty) => break,
+                Err(mpsc::TryRecvError::Disconnected) => break,
+            }
+        }
+    }
+
+    /// 请求解码指定路径的 BGA 图片（将自动合并重复请求）
+    pub fn request_bga_decode(&self, path: PathBuf) {
+        if let Some(tx) = &self.bga_decode_tx {
+            let _ = tx.send(path);
+        }
     }
 
     /// 调整画布大小
@@ -213,7 +276,8 @@ impl Renderer {
     }
 
     /// 绘制一帧可视实例
-    pub fn draw(&self, instances: &[Instance]) -> Result<()> {
+    pub fn draw(&mut self, instances: &[Instance]) -> Result<()> {
+        self.drain_bga_decoded();
         self.upload_screen_uniform();
         let frame = self.surface.get_current_texture()?;
         let view = frame
@@ -257,14 +321,23 @@ impl Renderer {
         Ok(())
     }
 
-    /// 根据给定路径加载并更新 BGA 图片
-    pub fn update_bga_image_from_path(&mut self, path: &Path) -> Result<()> {
+    /// 更新 BGA 图片（RGBA8，sRGB）
+    pub fn update_bga_image_from_rgba(&mut self, rgba: &[u8], w: u32, h: u32) -> Result<()> {
         self.bga
-            .update_image_from_path(&self.device, &self.queue, &self.screen_buffer, path)
+            .update_image_from_rgba(&self.device, &self.queue, &self.screen_buffer, rgba, w, h)
     }
     /// 处理窗口尺寸变化
     pub fn resize(&mut self, width: u32, height: u32) {
         self.resize_surface(width, height);
+    }
+}
+
+impl Drop for Renderer {
+    fn drop(&mut self) {
+        let _ = self.bga_decode_tx.take();
+        if let Some(handle) = self.bga_decode_thread.take() {
+            let _ = handle.join();
+        }
     }
 }
 

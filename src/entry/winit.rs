@@ -13,25 +13,15 @@ use winit::{
     window::WindowId,
 };
 
-use crate::Instance;
+use crate::entry::VisualApp;
 use crate::loops::{ControlMsg, InputMsg, VisualMsg, visual};
 
 /// 视觉应用状态
 struct App {
     /// 窗口实例
     window: winit::window::Window,
-    /// 渲染器实例
-    renderer: Option<visual::Renderer>,
-    /// 视觉消息接收端
-    visual_rx: mpsc::Receiver<VisualMsg>,
-    /// 最新一帧的实例列表
-    latest_instances: Vec<Instance>,
-}
-
-impl Drop for App {
-    fn drop(&mut self) {
-        let _ = self.renderer.take();
-    }
+    /// 视觉渲染应用
+    app: VisualApp,
 }
 
 /// 视觉事件处理器
@@ -137,9 +127,7 @@ impl ApplicationHandler for Handler {
         };
         self.app = Some(App {
             window,
-            renderer: Some(renderer),
-            visual_rx: rx,
-            latest_instances: visual::base_instances(),
+            app: VisualApp::new(renderer, rx),
         });
         let _ = self.control_tx.try_send(ControlMsg::Start);
     }
@@ -148,10 +136,8 @@ impl ApplicationHandler for Handler {
         match event {
             WindowEvent::CloseRequested => {}
             WindowEvent::Resized(size) => {
-                if let Some(app) = self.app.as_mut()
-                    && let Some(renderer) = app.renderer.as_mut()
-                {
-                    renderer.resize(size.width, size.height);
+                if let Some(app) = self.app.as_mut() {
+                    app.app.resize(size.width, size.height);
                     app.window.request_redraw();
                 }
             }
@@ -172,24 +158,8 @@ impl ApplicationHandler for Handler {
                 }
             }
             WindowEvent::RedrawRequested => {
-                if let Some(app) = self.app.as_mut()
-                    && let Some(renderer) = app.renderer.as_mut()
-                {
-                    loop {
-                        match app.visual_rx.try_recv() {
-                            Ok(msg) => match msg {
-                                VisualMsg::Instances(instances) => {
-                                    app.latest_instances = instances;
-                                }
-                                VisualMsg::Bga(path) => {
-                                    let _ = renderer.update_bga_image_from_path(&path);
-                                }
-                            },
-                            Err(mpsc::TryRecvError::Empty) => break,
-                            Err(mpsc::TryRecvError::Disconnected) => break,
-                        }
-                    }
-                    let _ = renderer.draw(&app.latest_instances);
+                if let Some(app) = self.app.as_mut() {
+                    app.app.redraw();
                 }
             }
             _ => {}
