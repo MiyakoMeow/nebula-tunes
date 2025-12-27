@@ -4,6 +4,8 @@
 //! - 根据屏幕尺寸居中缩放绘制单张图片
 //! - 与主矩形渲染管线复用统一缓冲
 
+use std::borrow::Cow;
+
 use anyhow::Result;
 use bytemuck::{Pod, Zeroable};
 use image::{ImageBuffer, Luma};
@@ -371,16 +373,16 @@ impl BgaRenderer {
     }
 
     /// 处理图层图片（如去除背景）
-    fn process_layer_image<'a>(layer: BgaLayer, img: &RgbaImage<'a>) -> std::borrow::Cow<'a, [u8]> {
+    fn process_layer_image<'a>(layer: BgaLayer, img: &RgbaImage<'a>) -> Cow<'a, [u8]> {
         match layer {
             BgaLayer::Layer | BgaLayer::Layer2 => {
                 let mut rgba_buf = img.rgba.to_vec();
                 if img.width != 0 && img.height != 0 {
                     Self::remove_background(&mut rgba_buf, img.width, img.height);
                 }
-                std::borrow::Cow::Owned(rgba_buf)
+                Cow::Owned(rgba_buf)
             }
-            BgaLayer::Bga | BgaLayer::Poor => std::borrow::Cow::Borrowed(img.rgba),
+            BgaLayer::Bga | BgaLayer::Poor => Cow::Borrowed(img.rgba),
         }
     }
 
