@@ -16,6 +16,7 @@ use bms_rs::chart_process::prelude::*;
 use bms_rs::chart_process::types::PlayheadEvent;
 use gametime::{TimeSpan, TimeStamp};
 
+use crate::chart::bms::BgaFileType;
 use crate::loops::audio::{Event, Msg};
 use crate::loops::visual::{
     BgaDecodeCache, base_instances, build_instances_for_processor_with_state, preload_bga_files,
@@ -52,6 +53,7 @@ pub fn run(
     mut processor: Option<BmsProcessor>,
     audio_paths: HashMap<WavId, PathBuf>,
     bmp_paths: HashMap<BmpId, PathBuf>,
+    bmp_types: HashMap<BmpId, BgaFileType>,
     bga_cache: Arc<BgaDecodeCache>,
     control_rx: mpsc::Receiver<ControlMsg>,
     visual_tx: mpsc::SyncSender<VisualMsg>,
@@ -231,10 +233,26 @@ pub fn run(
                     BgaLayer::Poor => VisualBgaLayer::Poor,
                     _ => VisualBgaLayer::Bga,
                 };
-                let _ = visual_tx.try_send(VisualMsg::BgaChange {
-                    layer: mapped_layer,
-                    path: path.clone(),
-                });
+
+                // 根据文件类型发送不同消息
+                let file_type = bmp_types.get(bmp_id);
+
+                match file_type {
+                    Some(BgaFileType::Video) => {
+                        let _ = visual_tx.try_send(VisualMsg::VideoPlay {
+                            layer: mapped_layer,
+                            path: path.clone(),
+                            loop_play: false, // 用户选择：播放一次
+                        });
+                    }
+                    _ => {
+                        // 图像BGA保持原有逻辑
+                        let _ = visual_tx.try_send(VisualMsg::BgaChange {
+                            layer: mapped_layer,
+                            path: path.clone(),
+                        });
+                    }
+                }
             }
             if let ChartEvent::Bgm { wav_id } = ev.event()
                 && let Some(wav_id) = wav_id.as_ref()

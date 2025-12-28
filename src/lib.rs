@@ -61,15 +61,16 @@ const fn key_to_lane(key: Key) -> Option<usize> {
 /// - winit/wgpu 初始化失败
 pub fn run(bms_path: Option<PathBuf>) -> Result<()> {
     let sys = load_sys(Path::new("config_sys.toml"))?;
-    let (pre_processor, pre_audio_paths, pre_bmp_paths) = if let Some(bms_path) = bms_path {
-        let (p, ap, bp) = future::block_on(chart::bms::load_bms_and_collect_paths(
-            bms_path,
-            sys.judge.visible_travel,
-        ))?;
-        (Some(p), ap, bp)
-    } else {
-        (None, HashMap::new(), HashMap::new())
-    };
+    let (pre_processor, pre_audio_paths, pre_bmp_paths, pre_bmp_types) =
+        if let Some(bms_path) = bms_path {
+            let (p, ap, bp, bt) = future::block_on(chart::bms::load_bms_and_collect_paths(
+                bms_path,
+                sys.judge.visible_travel,
+            ))?;
+            (Some(p), ap, bp, Some(bt))
+        } else {
+            (None, HashMap::new(), HashMap::new(), None)
+        };
     let (control_tx, control_rx) = mpsc::sync_channel::<loops::ControlMsg>(1);
     let (visual_tx, visual_rx) = mpsc::sync_channel::<VisualMsg>(2);
     let (input_tx, input_rx) = mpsc::sync_channel::<InputMsg>(64);
@@ -86,6 +87,7 @@ pub fn run(bms_path: Option<PathBuf>) -> Result<()> {
             pre_processor,
             pre_audio_paths,
             pre_bmp_paths,
+            pre_bmp_types.unwrap_or_default(),
             bga_cache_for_main,
             control_rx,
             visual_tx,

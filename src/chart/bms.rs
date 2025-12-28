@@ -13,6 +13,15 @@ use gametime::TimeSpan;
 
 use crate::filesystem;
 
+/// BGA 文件类型
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BgaFileType {
+    /// 图像文件
+    Image,
+    /// 视频文件
+    Video,
+}
+
 /// 加载 BMS 文件并收集音频/BGA 资源路径映射
 ///
 /// # Errors
@@ -27,6 +36,7 @@ pub(crate) async fn load_bms_and_collect_paths(
     BmsProcessor,
     HashMap<WavId, PathBuf>,
     HashMap<BmpId, PathBuf>,
+    HashMap<BmpId, BgaFileType>,
 )> {
     let bms_bytes = afs::read(&bms_path).await?;
     let mut det = EncodingDetector::new();
@@ -48,6 +58,7 @@ pub(crate) async fn load_bms_and_collect_paths(
     let bms_dir = bms_path.parent().unwrap_or(Path::new(".")).to_path_buf();
     let mut audio_paths: HashMap<WavId, PathBuf> = HashMap::new();
     let mut bmp_paths: HashMap<BmpId, PathBuf> = HashMap::new();
+    let mut bmp_types: HashMap<BmpId, BgaFileType> = HashMap::new();
     let child_list: Vec<PathBuf> = processor
         .audio_files()
         .into_values()
@@ -77,10 +88,12 @@ pub(crate) async fn load_bms_and_collect_paths(
         &bms_dir,
         &bmp_list,
         &[
-            "bmp", "jpg", "jpeg", "png", "mp4", "avi", "mpeg", "webm", "mkv",
+            "bmp", "jpg", "jpeg", "png", "mp4", "avi", "mpeg", "webm", "mkv", "wmv",
         ],
     )
     .await;
+    // 视频文件扩展名
+    const VIDEO_EXTS: &[&str] = &["mp4", "avi", "mpeg", "webm", "mkv", "wmv"];
     for (id, bmp_path) in processor.bmp_files().into_iter() {
         let stem = bmp_path
             .file_stem()
@@ -90,7 +103,22 @@ pub(crate) async fn load_bms_and_collect_paths(
         let chosen = stem
             .and_then(|s| bmp_index.get(&s).cloned())
             .unwrap_or(base);
+
+        // 判断文件类型
+        let file_type = chosen
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| {
+                if VIDEO_EXTS.contains(&ext.to_lowercase().as_str()) {
+                    BgaFileType::Video
+                } else {
+                    BgaFileType::Image
+                }
+            })
+            .unwrap_or(BgaFileType::Image);
+
         bmp_paths.insert(id, chosen);
+        bmp_types.insert(id, file_type);
     }
-    Ok((processor, audio_paths, bmp_paths))
+    Ok((processor, audio_paths, bmp_paths, bmp_types))
 }
