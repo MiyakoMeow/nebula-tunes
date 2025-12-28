@@ -222,7 +222,11 @@ impl Renderer {
             mapped_at_creation: false,
         });
         let bga = bga::BgaRenderer::new(&device, &queue, &screen_buffer, format);
-        let logical_size = [config.width as f32, config.height as f32];
+        #[expect(clippy::cast_precision_loss)]
+        let w = config.width as f32;
+        #[expect(clippy::cast_precision_loss)]
+        let h = config.height as f32;
+        let logical_size = [w, h];
 
         let (bga_decode_tx, bga_decode_rx) = mpsc::channel::<(BgaLayer, PathBuf)>();
         let (bga_decoded_tx, bga_decoded_rx) = mpsc::channel::<(BgaLayer, Arc<DecodedImage>)>();
@@ -313,19 +317,13 @@ impl Renderer {
 
     /// 非阻塞消费已完成的 BGA 解码结果，并将图片上传到 GPU
     fn drain_bga_decoded(&mut self) {
-        loop {
-            match self.bga_decoded_rx.try_recv() {
-                Ok((layer, decoded)) => {
-                    let _ = self.update_bga_image_from_rgba(
-                        layer,
-                        decoded.rgba.as_slice(),
-                        decoded.width,
-                        decoded.height,
-                    );
-                }
-                Err(mpsc::TryRecvError::Empty) => break,
-                Err(mpsc::TryRecvError::Disconnected) => break,
-            }
+        while let Ok((layer, decoded)) = self.bga_decoded_rx.try_recv() {
+            let _ = self.update_bga_image_from_rgba(
+                layer,
+                decoded.rgba.as_slice(),
+                decoded.width,
+                decoded.height,
+            );
         }
     }
 
@@ -417,7 +415,11 @@ impl Renderer {
             self.config.width = width;
             self.config.height = height;
             self.surface.configure(&self.device, &self.config);
-            self.logical_size = [width as f32, height as f32];
+            #[expect(clippy::cast_precision_loss)]
+            let w = width as f32;
+            #[expect(clippy::cast_precision_loss)]
+            let h = height as f32;
+            self.logical_size = [w, h];
         }
     }
 
@@ -512,7 +514,8 @@ impl Renderer {
             rpass.set_vertex_buffer(0, self.quad_vb.slice(..));
             rpass.set_vertex_buffer(1, self.instance_buf.slice(..));
             rpass.set_index_buffer(self.idx_buf.slice(..), wgpu::IndexFormat::Uint16);
-            rpass.draw_indexed(0..self.index_count, 0, 0..instances.len() as u32);
+            let instance_count = u32::try_from(instances.len()).unwrap_or(u32::MAX);
+            rpass.draw_indexed(0..self.index_count, 0, 0..instance_count);
             self.bga
                 .draw(&mut rpass, &self.quad_vb, &self.idx_buf, self.index_count);
         }
@@ -580,12 +583,16 @@ const NOTE_HEIGHT: f32 = 12.0;
 /// 计算总宽度（含轨道与间隔）
 #[must_use]
 pub fn total_width() -> f32 {
-    LANE_COUNT as f32 * LANE_WIDTH + (LANE_COUNT as f32 - 1.0) * LANE_GAP
+    #[expect(clippy::cast_precision_loss)]
+    let count = LANE_COUNT as f32;
+    count * LANE_WIDTH + (count - 1.0) * LANE_GAP
 }
 
 /// 计算指定轨道的 x 坐标
 fn lane_x(idx: usize) -> f32 {
     let left = -total_width() / 2.0 + LANE_WIDTH / 2.0;
     let offset = (RIGHT_PANEL_GAP + VISIBLE_HEIGHT) / 2.0;
-    left + idx as f32 * (LANE_WIDTH + LANE_GAP) - offset
+    #[expect(clippy::cast_precision_loss)]
+    let idx_f = idx as f32;
+    left + idx_f * (LANE_WIDTH + LANE_GAP) - offset
 }

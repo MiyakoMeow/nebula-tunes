@@ -134,6 +134,7 @@ pub fn run(
                         if lane != idx {
                             continue;
                         }
+                        #[allow(clippy::cast_possible_truncation)]
                         let r = ratio.as_f64() as f32;
                         if !(0.0..=1.0).contains(&r) {
                             continue;
@@ -149,7 +150,12 @@ pub fn run(
                     let Some((ev, r)) = best else {
                         continue;
                     };
-                    let nanos = (judge.travel.as_nanos() as f64 * r as f64).max(0.0) as u64;
+                    #[allow(clippy::cast_precision_loss)]
+                    #[allow(clippy::cast_possible_truncation)]
+                    #[allow(clippy::cast_sign_loss)]
+                    let nanos =
+                        u64::try_from((judge.travel.as_nanos() as f64 * r as f64).max(0.0) as i64)
+                            .unwrap_or(u64::MAX);
                     let dt = TimeSpan::from_duration(std::time::Duration::from_nanos(nanos));
                     let judge = if dt.as_nanos() <= judge.windows[0].as_nanos() {
                         4
@@ -202,8 +208,7 @@ pub fn run(
                         *flag = false;
                     }
                 }
-                Err(mpsc::TryRecvError::Empty) => break,
-                Err(mpsc::TryRecvError::Disconnected) => break,
+                Err(mpsc::TryRecvError::Empty | mpsc::TryRecvError::Disconnected) => break,
             }
         }
         let events: Vec<PlayheadEvent> = p.update(now).collect();
@@ -227,7 +232,6 @@ pub fn run(
                 && let Some(path) = bmp_paths.get(bmp_id)
             {
                 let mapped_layer = match layer {
-                    BgaLayer::Base => VisualBgaLayer::Bga,
                     BgaLayer::Overlay => VisualBgaLayer::Layer,
                     BgaLayer::Overlay2 => VisualBgaLayer::Layer2,
                     BgaLayer::Poor => VisualBgaLayer::Poor,
@@ -268,12 +272,14 @@ pub fn run(
             continue;
         };
         let elapsed = now.checked_elapsed_since(start).unwrap_or(TimeSpan::ZERO);
-        let sec = (elapsed.as_nanos().max(0) as u64) / 1_000_000_000;
+        let nanos = elapsed.as_nanos().max(0);
+        let sec = u64::try_from(nanos).unwrap_or(u64::MAX) / 1_000_000_000;
         if sec != last_log_sec {
             let visible = p.visible_events().count();
             let mut min_r: f32 = 1.0;
             let mut max_r: f32 = 0.0;
             for (_, r) in p.visible_events() {
+                #[allow(clippy::cast_possible_truncation)]
                 let rf = r.as_f64() as f32;
                 if rf < min_r {
                     min_r = rf;

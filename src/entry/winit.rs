@@ -142,7 +142,6 @@ impl ApplicationHandler for Handler {
 
     fn window_event(&mut self, _event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         match event {
-            WindowEvent::CloseRequested => {}
             WindowEvent::Resized(size) => {
                 if let Some(app) = self.app.as_mut() {
                     app.app.resize(size.width, size.height);
@@ -182,7 +181,7 @@ impl ApplicationHandler for Handler {
 }
 
 /// 运行 winit 事件循环并驱动渲染与输入分发
-pub(crate) fn run(
+pub fn run(
     visual_rx: mpsc::Receiver<VisualMsg>,
     control_tx: mpsc::SyncSender<ControlMsg>,
     input_tx: mpsc::SyncSender<InputMsg>,
