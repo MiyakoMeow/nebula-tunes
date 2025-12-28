@@ -30,7 +30,7 @@ pub struct DecodedImage {
 
 /// 解码后的缓存变体
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum DecodeVariant {
+pub enum DecodeVariant {
     /// 原始 RGBA
     Raw,
     /// 去除背景后的 RGBA
@@ -97,7 +97,7 @@ impl BgaDecodeCache {
 }
 
 /// 将指定图层映射到预处理变体
-pub(crate) const fn layer_to_variant(layer: BgaLayer) -> DecodeVariant {
+pub const fn layer_to_variant(layer: BgaLayer) -> DecodeVariant {
     match layer {
         BgaLayer::Layer | BgaLayer::Layer2 => DecodeVariant::RemoveBackground,
         BgaLayer::Bga | BgaLayer::Poor => DecodeVariant::Raw,

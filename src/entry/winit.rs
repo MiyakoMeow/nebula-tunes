@@ -182,7 +182,7 @@ impl ApplicationHandler for Handler {
 }
 
 /// 运行 winit 事件循环并驱动渲染与输入分发
-pub(crate) fn run(
+pub fn run(
     visual_rx: mpsc::Receiver<VisualMsg>,
     control_tx: mpsc::SyncSender<ControlMsg>,
     input_tx: mpsc::SyncSender<InputMsg>,

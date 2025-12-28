@@ -11,7 +11,7 @@ use crate::loops::BgaLayer;
 use crate::media::ffmpeg::DecodedFrame;
 
 /// 图片上传所需的 GPU 上下文
-pub(crate) struct UploadCtx<'a> {
+pub struct UploadCtx<'a> {
     /// 设备
     pub(crate) device: &'a wgpu::Device,
     /// 队列
@@ -21,7 +21,7 @@ pub(crate) struct UploadCtx<'a> {
 }
 
 /// RGBA8 sRGB 图片数据
-pub(crate) struct RgbaImage<'a> {
+pub struct RgbaImage<'a> {
     /// RGBA 像素数据
     pub(crate) rgba: &'a [u8],
     /// 宽度

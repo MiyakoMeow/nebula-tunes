@@ -1,6 +1,6 @@
 //! 程序入口模块
 
-pub(crate) mod winit;
+pub mod winit;
 
 use std::sync::mpsc;
 
@@ -8,7 +8,7 @@ use crate::Instance;
 use crate::loops::{VisualMsg, visual};
 
 /// 视觉应用：负责驱动渲染器与处理视觉消息
-pub(crate) struct VisualApp {
+pub struct VisualApp {
     /// 绑定到窗口表面的渲染器
     window_renderer: visual::Renderer,
     /// 视觉消息接收端

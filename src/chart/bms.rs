@@ -29,7 +29,7 @@ pub enum BgaFileType {
 /// - 读取 BMS 文件失败
 /// - 编码探测或解码失败
 /// - BMS 解析失败
-pub(crate) async fn load_bms_and_collect_paths(
+pub async fn load_bms_and_collect_paths(
     bms_path: PathBuf,
     travel: TimeSpan,
 ) -> Result<(
