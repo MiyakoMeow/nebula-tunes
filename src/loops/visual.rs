@@ -6,13 +6,17 @@
 
 mod bga;
 mod note;
-pub use bga::{BgaDecodeCache, BgaDecodedImage, preload_bga_files};
+
 pub use note::{base_instances, build_instances_for_processor_with_state};
+
+// Re-export from media module
+pub use crate::media::ffmpeg::{DecodedFrame, VideoDecoder};
+pub use crate::media::{BgaDecodeCache, DecodedImage, decode_and_cache, preload_bga_files};
 
 use std::{
     collections::HashMap,
     path::PathBuf,
-    sync::{Arc, mpsc},
+    sync::{Arc, Mutex, mpsc},
     thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
@@ -23,6 +27,23 @@ use wgpu::util::DeviceExt;
 
 use crate::Instance;
 use crate::loops::BgaLayer;
+use crate::media::ffmpeg::{FFmpegVideoDecoder, FrameQueue, TextureManager};
+
+/// 单个视频播放器状态
+struct VideoPlayer {
+    /// 播放开始时间
+    start_time: Option<Instant>,
+    /// 是否正在播放
+    is_playing: bool,
+    /// 视频帧队列（共享引用）
+    frame_queue: Arc<Mutex<FrameQueue>>,
+    /// 纹理管理器
+    texture_manager: Option<TextureManager>,
+    /// 视频宽高
+    dimensions: (u32, u32),
+    /// 最后一帧的索引（避免重复上传）
+    last_frame_index: Option<u64>,
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, Zeroable, Pod)]
@@ -59,7 +80,7 @@ pub struct Renderer {
     /// BGA 解码请求发送端（发送图片路径）
     bga_decode_tx: Option<mpsc::Sender<(BgaLayer, PathBuf)>>,
     /// BGA 解码结果接收端
-    bga_decoded_rx: mpsc::Receiver<(BgaLayer, Arc<BgaDecodedImage>)>,
+    bga_decoded_rx: mpsc::Receiver<(BgaLayer, Arc<DecodedImage>)>,
     /// BGA 解码线程句柄
     bga_decode_thread: Option<JoinHandle<()>>,
     /// 三角形索引数量
@@ -68,6 +89,14 @@ pub struct Renderer {
     logical_size: [f32; 2],
     /// POOR 图层可见到的时间点（到期自动隐藏）
     poor_until: Option<Instant>,
+    /// 视频播放器映射（每个图层一个）
+    video_players: HashMap<BgaLayer, VideoPlayer>,
+    /// 视频解码命令通道 (layer, path, `loop_play`)
+    video_cmd_tx: mpsc::Sender<(BgaLayer, PathBuf, bool)>,
+    /// 视频帧接收通道 (layer, frame)
+    pub video_frame_rx: mpsc::Receiver<(BgaLayer, DecodedFrame)>,
+    /// 解码线程句柄
+    video_decode_thread: Option<JoinHandle<()>>,
 }
 
 impl Renderer {
@@ -196,7 +225,7 @@ impl Renderer {
         let logical_size = [config.width as f32, config.height as f32];
 
         let (bga_decode_tx, bga_decode_rx) = mpsc::channel::<(BgaLayer, PathBuf)>();
-        let (bga_decoded_tx, bga_decoded_rx) = mpsc::channel::<(BgaLayer, Arc<BgaDecodedImage>)>();
+        let (bga_decoded_tx, bga_decoded_rx) = mpsc::channel::<(BgaLayer, Arc<DecodedImage>)>();
         let bga_cache_for_decode = bga_cache;
         let bga_decode_thread = thread::spawn(move || {
             loop {
@@ -218,11 +247,42 @@ impl Renderer {
                 }
                 for (latest_layer, latest_path) in latest {
                     if let Some(decoded) =
-                        bga::decode_and_cache(&bga_cache_for_decode, latest_layer, latest_path)
+                        decode_and_cache(&bga_cache_for_decode, latest_layer, latest_path)
                     {
                         let _ = bga_decoded_tx.send((latest_layer, decoded));
                     }
                 }
+            }
+        });
+
+        // 视频解码线程初始化
+        let (video_cmd_tx, video_cmd_rx) = mpsc::channel::<(BgaLayer, PathBuf, bool)>();
+        let (video_frame_tx, video_frame_rx) = mpsc::channel::<(BgaLayer, DecodedFrame)>();
+
+        let video_decode_thread = thread::spawn(move || {
+            // 维护每个图层的解码器
+            let mut decoders: HashMap<BgaLayer, FFmpegVideoDecoder> = HashMap::new();
+
+            loop {
+                // 处理新的播放请求
+                match video_cmd_rx.try_recv() {
+                    Ok((layer, path, _loop_play)) => {
+                        if let Ok(decoder) = FFmpegVideoDecoder::new(&path) {
+                            decoders.insert(layer, decoder);
+                        }
+                    }
+                    Err(mpsc::TryRecvError::Empty) => {}
+                    Err(mpsc::TryRecvError::Disconnected) => break,
+                }
+
+                // 持续解码帧
+                for (layer, decoder) in decoders.iter_mut() {
+                    if let Ok(Some(frame)) = decoder.decode_next_frame() {
+                        let _ = video_frame_tx.send((*layer, frame));
+                    }
+                }
+
+                thread::sleep(Duration::from_millis(10));
             }
         });
 
@@ -244,6 +304,10 @@ impl Renderer {
             index_count: 6,
             logical_size,
             poor_until: None,
+            video_players: HashMap::new(),
+            video_cmd_tx,
+            video_frame_rx,
+            video_decode_thread: Some(video_decode_thread),
         })
     }
 
@@ -279,6 +343,74 @@ impl Renderer {
         self.poor_until = Instant::now().checked_add(POOR_VISIBLE_FOR);
     }
 
+    /// 启动视频播放
+    pub fn start_video(&mut self, layer: BgaLayer, path: PathBuf, _loop_play: bool) {
+        // 发送解码命令
+        let _ = self.video_cmd_tx.send((layer, path, _loop_play));
+
+        // 创建播放器状态
+        let player = VideoPlayer {
+            start_time: Some(Instant::now()),
+            is_playing: true,
+            frame_queue: Arc::new(Mutex::new(FrameQueue::new(3))),
+            texture_manager: None, // 稍后创建
+            dimensions: (0, 0),
+            last_frame_index: None,
+        };
+
+        self.video_players.insert(layer, player);
+    }
+
+    /// 停止视频播放
+    pub fn stop_video(&mut self, layer: BgaLayer) {
+        self.video_players.remove(&layer);
+    }
+
+    /// 跳转视频时间
+    pub const fn seek_video(&mut self, _layer: BgaLayer, _timestamp: f64) {
+        // TODO: 实现跳转逻辑（需要解码器支持seek）
+    }
+
+    /// 更新视频帧（从解码线程接收）
+    pub fn update_video_frame_internal(&mut self, layer: BgaLayer, frame: DecodedFrame) {
+        if let Some(player) = self.video_players.get_mut(&layer) {
+            // 更新帧队列
+            if let Ok(mut queue) = player.frame_queue.lock() {
+                queue.push(frame.clone());
+            }
+
+            // 首次收到帧时创建纹理管理器
+            if player.texture_manager.is_none() {
+                player.texture_manager = Some(TextureManager::new(
+                    &self.device,
+                    frame.width,
+                    frame.height,
+                    3, // 三缓冲
+                ));
+                player.dimensions = (frame.width, frame.height);
+            }
+
+            // 更新最后一帧索引
+            player.last_frame_index = Some(frame.frame_index);
+
+            // 上传到GPU
+            if let Some(ref mut tm) = player.texture_manager
+                && let Ok(_view) = tm.upload_frame(&self.queue, &frame)
+            {
+                // 更新 BGA 渲染器
+                let _ = self.bga.update_video_frame(
+                    layer,
+                    bga::UploadCtx {
+                        device: &self.device,
+                        queue: &self.queue,
+                        screen_buffer: &self.screen_buffer,
+                    },
+                    &frame,
+                );
+            }
+        }
+    }
+
     /// 调整画布大小
     fn resize_surface(&mut self, width: u32, height: u32) {
         if width > 0 && height > 0 {
@@ -307,6 +439,44 @@ impl Renderer {
             self.poor_until = None;
         }
         self.drain_bga_decoded();
+
+        // 同步视频帧（新增）
+        let now = Instant::now();
+        for (layer, player) in self.video_players.iter_mut() {
+            if !player.is_playing {
+                continue;
+            }
+
+            if let Some(start) = player.start_time {
+                let elapsed = now.duration_since(start).as_secs_f64();
+
+                // 从帧队列获取最接近的帧
+                if let Ok(queue) = player.frame_queue.lock()
+                    && let Some(frame) = queue.get_frame_at_time(elapsed)
+                {
+                    // 检查是否需要更新纹理（避免重复上传）
+                    let should_update = player
+                        .last_frame_index
+                        .is_none_or(|last_idx| last_idx != frame.frame_index);
+
+                    if should_update
+                        && let Some(ref mut tm) = player.texture_manager
+                        && let Ok(_view) = tm.upload_frame(&self.queue, &frame)
+                    {
+                        let _ = self.bga.update_video_frame(
+                            *layer,
+                            bga::UploadCtx {
+                                device: &self.device,
+                                queue: &self.queue,
+                                screen_buffer: &self.screen_buffer,
+                            },
+                            &frame,
+                        );
+                    }
+                }
+            }
+        }
+
         self.upload_screen_uniform();
         self.bga.prepare(&self.queue);
         let frame = self.surface.get_current_texture()?;
@@ -383,6 +553,10 @@ impl Drop for Renderer {
     fn drop(&mut self) {
         let _ = self.bga_decode_tx.take();
         if let Some(handle) = self.bga_decode_thread.take() {
+            let _ = handle.join();
+        }
+        // 视频解码线程会自动退出（当 video_cmd_tx 被drop时）
+        if let Some(handle) = self.video_decode_thread.take() {
             let _ = handle.join();
         }
     }

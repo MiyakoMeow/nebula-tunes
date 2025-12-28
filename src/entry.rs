@@ -49,7 +49,37 @@ impl VisualApp {
                     VisualMsg::BgaPoorTrigger => {
                         self.window_renderer.trigger_poor();
                     }
+                    // 视频消息处理
+                    VisualMsg::VideoPlay {
+                        layer,
+                        path,
+                        loop_play,
+                    } => {
+                        self.window_renderer.start_video(layer, path, loop_play);
+                    }
+                    VisualMsg::VideoFrame { layer, frame } => {
+                        self.window_renderer
+                            .update_video_frame_internal(layer, frame);
+                    }
+                    VisualMsg::VideoStop { layer } => {
+                        self.window_renderer.stop_video(layer);
+                    }
+                    VisualMsg::VideoSeek { layer, timestamp } => {
+                        self.window_renderer.seek_video(layer, timestamp);
+                    }
                 },
+                Err(mpsc::TryRecvError::Empty) => break,
+                Err(mpsc::TryRecvError::Disconnected) => break,
+            }
+        }
+
+        // 处理解码线程发送的视频帧消息
+        loop {
+            match self.window_renderer.video_frame_rx.try_recv() {
+                Ok((layer, frame)) => {
+                    self.window_renderer
+                        .update_video_frame_internal(layer, frame);
+                }
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => break,
             }

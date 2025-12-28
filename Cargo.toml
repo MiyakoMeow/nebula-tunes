@@ -17,6 +17,7 @@ bms-rs = { git = "https://github.com/MikuroXina/bms-rs" }
 bytemuck = "1"
 chardetng = "0.1"
 encoding_rs = "0.8"
+ffmpeg-next = "8"
 futures-lite = "2"
 gametime = { version = "0.7", features = ["global_reference"] }
 image = "0.25"
