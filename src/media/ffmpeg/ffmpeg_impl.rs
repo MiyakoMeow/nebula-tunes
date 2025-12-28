@@ -7,12 +7,22 @@ use std::path::Path;
 
 /// `FFmpeg` 视频解码器
 pub struct FFmpegVideoDecoder {
+    /// `FFmpeg` 视频解码器
     decoder: ffmpeg::decoder::Video,
+    /// 像素格式转换器
     scaler: ffmpeg::software::scaling::Context,
+    /// 当前帧索引
     frame_index: u64,
+    /// 视频宽度
+    #[allow(dead_code)]
     width: u32,
+    /// 视频高度
+    #[allow(dead_code)]
     height: u32,
+    /// 帧率
+    #[allow(dead_code)]
     fps: f64,
+    /// 输入格式上下文
     input: ffmpeg::format::context::Input,
 }
 
@@ -92,7 +102,9 @@ impl VideoDecoder for FFmpegVideoDecoder {
                     for y in 0..height {
                         let row_start = y as usize * stride;
                         let row_end = row_start + (width * 4) as usize;
-                        rgba.extend_from_slice(&data[row_start..row_end]);
+                        if let Some(row_data) = data.get(row_start..row_end) {
+                            rgba.extend_from_slice(row_data);
+                        }
                     }
 
                     let timestamp = frame.timestamp().unwrap_or(0) as f64;

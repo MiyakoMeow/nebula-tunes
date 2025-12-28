@@ -2,7 +2,7 @@
 //!
 //! 包含图像和视频解码、处理功能
 
-pub mod image;
 pub mod ffmpeg;
+pub mod image;
 
-pub use image::{BgaDecodeCache, BgaDecodedImage, decode_and_cache, preload_bga_files};
+pub use image::{BgaDecodeCache, DecodedImage, decode_and_cache, preload_bga_files};

@@ -61,6 +61,7 @@ pub enum VisualMsg {
         loop_play: bool,
     },
     /// 更新视频帧
+    #[allow(dead_code)]
     VideoFrame {
         /// 目标图层
         layer: BgaLayer,
@@ -68,11 +69,13 @@ pub enum VisualMsg {
         frame: crate::loops::visual::DecodedFrame,
     },
     /// 停止视频播放
+    #[allow(dead_code)]
     VideoStop {
         /// 目标图层
         layer: BgaLayer,
     },
     /// 跳转到指定时间戳
+    #[allow(dead_code)]
     VideoSeek {
         /// 目标图层
         layer: BgaLayer,

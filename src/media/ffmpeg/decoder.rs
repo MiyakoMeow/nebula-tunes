@@ -22,6 +22,7 @@ pub struct DecodedFrame {
 /// 视频解码器 trait
 ///
 /// 所有视频解码器实现都需要实现此 trait
+#[allow(dead_code)]
 pub trait VideoDecoder {
     /// 解码下一帧
     ///
@@ -30,17 +31,22 @@ pub trait VideoDecoder {
     fn decode_next_frame(&mut self) -> Result<Option<DecodedFrame>>;
 
     /// 跳转到指定帧
+    #[allow(dead_code)]
     fn seek_to_frame(&mut self, frame_idx: u64) -> Result<()>;
 
     /// 获取当前帧索引
+    #[allow(dead_code)]
     fn current_frame_index(&self) -> u64;
 
     /// 获取视频宽度
+    #[allow(dead_code)]
     fn width(&self) -> u32;
 
     /// 获取视频高度
+    #[allow(dead_code)]
     fn height(&self) -> u32;
 
     /// 获取帧率（FPS）
+    #[allow(dead_code)]
     fn fps(&self) -> f64;
 }

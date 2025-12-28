@@ -17,8 +17,9 @@ use imageproc::region_labelling::{Connectivity, connected_components};
 
 use crate::loops::BgaLayer;
 
-/// 已解码的 BGA 图片数据
-pub struct BgaDecodedImage {
+/// 已解码的图片数据
+#[allow(clippy::module_name_repetitions)]
+pub struct DecodedImage {
     /// RGBA8 像素缓冲
     pub rgba: Vec<u8>,
     /// 宽度
@@ -29,7 +30,7 @@ pub struct BgaDecodedImage {
 
 /// 解码后的缓存变体
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-enum DecodeVariant {
+pub(crate) enum DecodeVariant {
     /// 原始 RGBA
     Raw,
     /// 去除背景后的 RGBA
@@ -48,7 +49,7 @@ struct CacheKey {
 /// BGA 图片解码缓存（跨线程共享）
 pub struct BgaDecodeCache {
     /// (路径, 变体) 到已解码图片的映射
-    inner: Mutex<HashMap<CacheKey, Arc<BgaDecodedImage>>>,
+    inner: Mutex<HashMap<CacheKey, Arc<DecodedImage>>>,
 }
 
 impl BgaDecodeCache {
@@ -62,7 +63,11 @@ impl BgaDecodeCache {
 
     /// 查询指定变体的缓存条目
     #[must_use]
-    pub(crate) fn get_variant(&self, variant: DecodeVariant, path: &Path) -> Option<Arc<BgaDecodedImage>> {
+    pub(crate) fn get_variant(
+        &self,
+        variant: DecodeVariant,
+        path: &Path,
+    ) -> Option<Arc<DecodedImage>> {
         let key = CacheKey {
             path: path.to_path_buf(),
             variant,
@@ -78,8 +83,8 @@ impl BgaDecodeCache {
         rgba: Vec<u8>,
         width: u32,
         height: u32,
-    ) -> Arc<BgaDecodedImage> {
-        let decoded = Arc::new(BgaDecodedImage {
+    ) -> Arc<DecodedImage> {
+        let decoded = Arc::new(DecodedImage {
             rgba,
             width,
             height,
@@ -92,7 +97,7 @@ impl BgaDecodeCache {
 }
 
 /// 将指定图层映射到预处理变体
-pub(crate) fn layer_to_variant(layer: BgaLayer) -> DecodeVariant {
+pub(crate) const fn layer_to_variant(layer: BgaLayer) -> DecodeVariant {
     match layer {
         BgaLayer::Layer | BgaLayer::Layer2 => DecodeVariant::RemoveBackground,
         BgaLayer::Bga | BgaLayer::Poor => DecodeVariant::Raw,
@@ -170,7 +175,7 @@ pub fn decode_and_cache(
     cache: &BgaDecodeCache,
     layer: BgaLayer,
     path: PathBuf,
-) -> Option<Arc<BgaDecodedImage>> {
+) -> Option<Arc<DecodedImage>> {
     let want = layer_to_variant(layer);
     if let Some(decoded) = cache.get_variant(want, path.as_path()) {
         return Some(decoded);

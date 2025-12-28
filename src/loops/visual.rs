@@ -7,12 +7,11 @@
 mod bga;
 mod note;
 
-pub use bga::BgaRenderer;
 pub use note::{base_instances, build_instances_for_processor_with_state};
 
 // Re-export from media module
-pub use crate::media::{BgaDecodeCache, BgaDecodedImage, decode_and_cache, preload_bga_files};
 pub use crate::media::ffmpeg::{DecodedFrame, VideoDecoder};
+pub use crate::media::{BgaDecodeCache, DecodedImage, decode_and_cache, preload_bga_files};
 
 use std::{
     collections::HashMap,
@@ -81,7 +80,7 @@ pub struct Renderer {
     /// BGA 解码请求发送端（发送图片路径）
     bga_decode_tx: Option<mpsc::Sender<(BgaLayer, PathBuf)>>,
     /// BGA 解码结果接收端
-    bga_decoded_rx: mpsc::Receiver<(BgaLayer, Arc<BgaDecodedImage>)>,
+    bga_decoded_rx: mpsc::Receiver<(BgaLayer, Arc<DecodedImage>)>,
     /// BGA 解码线程句柄
     bga_decode_thread: Option<JoinHandle<()>>,
     /// 三角形索引数量
@@ -92,7 +91,7 @@ pub struct Renderer {
     poor_until: Option<Instant>,
     /// 视频播放器映射（每个图层一个）
     video_players: HashMap<BgaLayer, VideoPlayer>,
-    /// 视频解码命令通道 (layer, path, loop_play)
+    /// 视频解码命令通道 (layer, path, `loop_play`)
     video_cmd_tx: mpsc::Sender<(BgaLayer, PathBuf, bool)>,
     /// 视频帧接收通道 (layer, frame)
     pub video_frame_rx: mpsc::Receiver<(BgaLayer, DecodedFrame)>,
@@ -226,7 +225,7 @@ impl Renderer {
         let logical_size = [config.width as f32, config.height as f32];
 
         let (bga_decode_tx, bga_decode_rx) = mpsc::channel::<(BgaLayer, PathBuf)>();
-        let (bga_decoded_tx, bga_decoded_rx) = mpsc::channel::<(BgaLayer, Arc<BgaDecodedImage>)>();
+        let (bga_decoded_tx, bga_decoded_rx) = mpsc::channel::<(BgaLayer, Arc<DecodedImage>)>();
         let bga_cache_for_decode = bga_cache;
         let bga_decode_thread = thread::spawn(move || {
             loop {
@@ -368,7 +367,7 @@ impl Renderer {
     }
 
     /// 跳转视频时间
-    pub fn seek_video(&mut self, _layer: BgaLayer, _timestamp: f64) {
+    pub const fn seek_video(&mut self, _layer: BgaLayer, _timestamp: f64) {
         // TODO: 实现跳转逻辑（需要解码器支持seek）
     }
 
@@ -376,7 +375,9 @@ impl Renderer {
     pub fn update_video_frame_internal(&mut self, layer: BgaLayer, frame: DecodedFrame) {
         if let Some(player) = self.video_players.get_mut(&layer) {
             // 更新帧队列
-            player.frame_queue.lock().unwrap().push(frame.clone());
+            if let Ok(mut queue) = player.frame_queue.lock() {
+                queue.push(frame.clone());
+            }
 
             // 首次收到帧时创建纹理管理器
             if player.texture_manager.is_none() {
@@ -393,19 +394,19 @@ impl Renderer {
             player.last_frame_index = Some(frame.frame_index);
 
             // 上传到GPU
-            if let Some(ref mut tm) = player.texture_manager {
-                if let Ok(_view) = tm.upload_frame(&self.queue, &frame) {
-                    // 更新 BGA 渲染器
-                    let _ = self.bga.update_video_frame(
-                        layer,
-                        bga::UploadCtx {
-                            device: &self.device,
-                            queue: &self.queue,
-                            screen_buffer: &self.screen_buffer,
-                        },
-                        &frame,
-                    );
-                }
+            if let Some(ref mut tm) = player.texture_manager
+                && let Ok(_view) = tm.upload_frame(&self.queue, &frame)
+            {
+                // 更新 BGA 渲染器
+                let _ = self.bga.update_video_frame(
+                    layer,
+                    bga::UploadCtx {
+                        device: &self.device,
+                        queue: &self.queue,
+                        screen_buffer: &self.screen_buffer,
+                    },
+                    &frame,
+                );
             }
         }
     }
@@ -450,30 +451,27 @@ impl Renderer {
                 let elapsed = now.duration_since(start).as_secs_f64();
 
                 // 从帧队列获取最接近的帧
-                if let Ok(queue) = player.frame_queue.lock() {
-                    if let Some(frame) = queue.get_frame_at_time(elapsed) {
-                        // 检查是否需要更新纹理（避免重复上传）
-                        let should_update = if let Some(last_idx) = player.last_frame_index {
-                            last_idx != frame.frame_index
-                        } else {
-                            true
-                        };
+                if let Ok(queue) = player.frame_queue.lock()
+                    && let Some(frame) = queue.get_frame_at_time(elapsed)
+                {
+                    // 检查是否需要更新纹理（避免重复上传）
+                    let should_update = player
+                        .last_frame_index
+                        .is_none_or(|last_idx| last_idx != frame.frame_index);
 
-                        if should_update {
-                            if let Some(ref mut tm) = player.texture_manager {
-                                if let Ok(_view) = tm.upload_frame(&self.queue, &frame) {
-                                    let _ = self.bga.update_video_frame(
-                                        *layer,
-                                        bga::UploadCtx {
-                                            device: &self.device,
-                                            queue: &self.queue,
-                                            screen_buffer: &self.screen_buffer,
-                                        },
-                                        &frame,
-                                    );
-                                }
-                            }
-                        }
+                    if should_update
+                        && let Some(ref mut tm) = player.texture_manager
+                        && let Ok(_view) = tm.upload_frame(&self.queue, &frame)
+                    {
+                        let _ = self.bga.update_video_frame(
+                            *layer,
+                            bga::UploadCtx {
+                                device: &self.device,
+                                queue: &self.queue,
+                                screen_buffer: &self.screen_buffer,
+                            },
+                            &frame,
+                        );
                     }
                 }
             }

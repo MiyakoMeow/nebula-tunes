@@ -10,10 +10,15 @@ use wgpu;
 ///
 /// 使用双缓冲或多缓冲机制，避免解码和渲染冲突
 pub struct TextureManager {
+    /// 纹理缓冲区
     textures: Vec<Option<wgpu::Texture>>,
+    /// 纹理视图缓冲区
     views: Vec<Option<wgpu::TextureView>>,
+    /// 当前使用的纹理索引
     current_index: usize,
+    /// 纹理宽度
     width: u32,
+    /// 纹理高度
     height: u32,
 }
 
@@ -74,7 +79,9 @@ impl TextureManager {
         }
 
         let idx = self.current_index;
-        if let (Some(texture), Some(_view)) = (&self.textures[idx], &self.views[idx]) {
+        if let (Some(texture_opt), Some(view_opt)) = (self.textures.get(idx), self.views.get(idx))
+            && let (Some(texture), Some(_view)) = (texture_opt.as_ref(), view_opt.as_ref())
+        {
             queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture,
@@ -99,17 +106,22 @@ impl TextureManager {
         // 切换到下一个纹理
         self.current_index = (self.current_index + 1) % self.textures.len();
 
-        Ok(self.views[idx].as_ref().unwrap())
+        self.views
+            .get(idx)
+            .and_then(|v| v.as_ref())
+            .ok_or_else(|| anyhow::anyhow!("无法获取纹理视图"))
     }
 
     /// 获取当前纹理视图（不上传新帧）
     #[must_use]
+    #[allow(dead_code)]
     pub fn current_view(&self) -> Option<&wgpu::TextureView> {
         let idx = (self.current_index + self.textures.len() - 1) % self.textures.len();
-        self.views[idx].as_ref()
+        self.views.get(idx).and_then(|v| v.as_ref())
     }
 
     /// 重置到初始状态
+    #[allow(dead_code)]
     pub const fn reset(&mut self) {
         self.current_index = 0;
     }

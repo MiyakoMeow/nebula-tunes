@@ -10,7 +10,9 @@ use std::sync::Arc;
 ///
 /// 预解码 2-3 帧以应对解码延迟
 pub struct FrameQueue {
+    /// 帧队列
     frames: VecDeque<Arc<DecodedFrame>>,
+    /// 队列容量
     capacity: usize,
 }
 
@@ -54,23 +56,27 @@ impl FrameQueue {
 
     /// 获取最新的帧
     #[must_use]
+    #[allow(dead_code)]
     pub fn latest_frame(&self) -> Option<Arc<DecodedFrame>> {
         self.frames.back().cloned()
     }
 
     /// 获取队列长度
     #[must_use]
+    #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.frames.len()
     }
 
     /// 检查队列是否为空
     #[must_use]
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.frames.is_empty()
     }
 
     /// 清空队列
+    #[allow(dead_code)]
     pub fn clear(&mut self) {
         self.frames.clear();
     }

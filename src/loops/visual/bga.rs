@@ -4,8 +4,6 @@
 //! - 根据屏幕尺寸居中缩放绘制单张图片
 //! - 与主矩形渲染管线复用统一缓冲
 
-use std::path::Path;
-
 use anyhow::Result;
 use bytemuck::{Pod, Zeroable};
 
