@@ -51,4 +51,32 @@ pub enum VisualMsg {
     },
     /// 触发显示 POOR 图层
     BgaPoorTrigger,
+    /// 播放视频 BGA
+    VideoPlay {
+        /// 目标图层
+        layer: BgaLayer,
+        /// 视频路径
+        path: PathBuf,
+        /// 是否循环播放
+        loop_play: bool,
+    },
+    /// 更新视频帧
+    VideoFrame {
+        /// 目标图层
+        layer: BgaLayer,
+        /// 解码后的帧数据
+        frame: crate::loops::visual::DecodedFrame,
+    },
+    /// 停止视频播放
+    VideoStop {
+        /// 目标图层
+        layer: BgaLayer,
+    },
+    /// 跳转到指定时间戳
+    VideoSeek {
+        /// 目标图层
+        layer: BgaLayer,
+        /// 时间戳（秒）
+        timestamp: f64,
+    },
 }

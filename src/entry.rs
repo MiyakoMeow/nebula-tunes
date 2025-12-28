@@ -49,6 +49,19 @@ impl VisualApp {
                     VisualMsg::BgaPoorTrigger => {
                         self.window_renderer.trigger_poor();
                     }
+                    // 视频消息（暂时忽略，待实现）
+                    VisualMsg::VideoPlay { .. } => {
+                        // TODO: 实现视频播放
+                    }
+                    VisualMsg::VideoFrame { .. } => {
+                        // TODO: 处理视频帧
+                    }
+                    VisualMsg::VideoStop { .. } => {
+                        // TODO: 停止视频
+                    }
+                    VisualMsg::VideoSeek { .. } => {
+                        // TODO: 视频跳转
+                    }
                 },
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => break,

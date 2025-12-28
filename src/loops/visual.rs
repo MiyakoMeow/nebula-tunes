@@ -6,8 +6,11 @@
 
 mod bga;
 mod note;
+mod video;
+
 pub use bga::{BgaDecodeCache, BgaDecodedImage, preload_bga_files};
 pub use note::{base_instances, build_instances_for_processor_with_state};
+pub use video::{DecodedFrame, VideoDecoder};
 
 use std::{
     collections::HashMap,

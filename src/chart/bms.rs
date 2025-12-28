@@ -73,9 +73,14 @@ pub(crate) async fn load_bms_and_collect_paths(
         .into_values()
         .map(std::path::Path::to_path_buf)
         .collect();
-    let bmp_index =
-        filesystem::choose_paths_by_ext_async(&bms_dir, &bmp_list, &["bmp", "jpg", "jpeg", "png"])
-            .await;
+    let bmp_index = filesystem::choose_paths_by_ext_async(
+        &bms_dir,
+        &bmp_list,
+        &[
+            "bmp", "jpg", "jpeg", "png", "mp4", "avi", "mpeg", "webm", "mkv",
+        ],
+    )
+    .await;
     for (id, bmp_path) in processor.bmp_files().into_iter() {
         let stem = bmp_path
             .file_stem()

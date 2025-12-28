@@ -23,6 +23,7 @@ use image::{ImageBuffer, Luma};
 use imageproc::region_labelling::{Connectivity, connected_components};
 
 use crate::loops::BgaLayer;
+use crate::loops::visual::video::DecodedFrame;
 
 /// 已解码的 BGA 图片数据
 pub struct BgaDecodedImage {
@@ -680,6 +681,26 @@ impl BgaRenderer {
         }
         self.rebuild_bind_group(ctx.device, ctx.screen_buffer);
         Ok(())
+    }
+
+    /// 更新指定图层的视频帧（RGBA8，sRGB）
+    ///
+    /// 从 `DecodedFrame` 更新纹理，用于视频 BGA
+    pub fn update_video_frame(
+        &mut self,
+        layer: BgaLayer,
+        ctx: UploadCtx<'_>,
+        frame: &DecodedFrame,
+    ) -> Result<()> {
+        self.update_layer_image(
+            layer,
+            ctx,
+            RgbaImage {
+                rgba: &frame.rgba,
+                width: frame.width,
+                height: frame.height,
+            },
+        )
     }
 
     /// 设置指定图层是否可见
