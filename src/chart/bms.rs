@@ -10,6 +10,7 @@ use async_fs as afs;
 use bms_rs::{bms::prelude::*, chart_process::prelude::*};
 use chardetng::EncodingDetector;
 use gametime::TimeSpan;
+use tracing::info;
 
 use crate::filesystem;
 
@@ -47,12 +48,12 @@ pub async fn load_bms_and_collect_paths(
     let Ok(bms) = bms else {
         anyhow::bail!("failed to parse BMS")
     };
-    println!("Title: {:?}", bms.music_info.title);
-    println!("Artist: {:?}", bms.music_info.artist);
+    info!(title = ?bms.music_info.title, "BMS 标题");
+    info!(artist = ?bms.music_info.artist, "BMS 艺术家");
     let base_bpm = StartBpmGenerator
         .generate(&bms)
         .unwrap_or_else(|| BaseBpm(120.0.into()));
-    println!("BaseBpm: {}", base_bpm.value());
+    info!(bpm = %base_bpm.value(), "BMS 基础 BPM");
     let processor =
         BmsProcessor::new::<KeyLayoutBeat>(&bms, VisibleRangePerBpm::new(&base_bpm, travel));
     let bms_dir = bms_path

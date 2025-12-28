@@ -15,6 +15,7 @@ use std::{
 use bms_rs::chart_process::prelude::*;
 use bms_rs::chart_process::types::PlayheadEvent;
 use gametime::{TimeSpan, TimeStamp};
+use tracing::debug;
 
 use crate::chart::bms::BgaFileType;
 use crate::loops::audio::{Event, Msg};
@@ -288,9 +289,13 @@ pub fn run(
                     max_r = rf;
                 }
             }
-            println!(
-                "elapsed={}s visible={} ratio=[{:.2},{:.2}] audio={}",
-                sec, visible, min_r, max_r, audio_plays_this_sec
+            debug!(
+                elapsed_sec = sec,
+                visible,
+                ratio_min = min_r,
+                ratio_max = max_r,
+                audio_plays = audio_plays_this_sec,
+                "主循环性能统计"
             );
             audio_plays_this_sec = 0;
             last_log_sec = sec;

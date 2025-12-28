@@ -4,6 +4,7 @@ pub(crate) mod chart;
 pub mod config;
 pub(crate) mod entry;
 pub(crate) mod filesystem;
+pub mod logging;
 pub(crate) mod loops;
 pub(crate) mod media;
 
@@ -60,6 +61,7 @@ const fn key_to_lane(key: Key) -> Option<usize> {
 /// - 加载谱面与资源索引失败
 /// - winit/wgpu 初始化失败
 pub fn run(bms_path: Option<PathBuf>) -> Result<()> {
+    logging::init_logging();
     let sys = load_sys(Path::new("config_sys.toml"))?;
     let (pre_processor, pre_audio_paths, pre_bmp_paths, pre_bmp_types) =
         if let Some(bms_path) = bms_path {

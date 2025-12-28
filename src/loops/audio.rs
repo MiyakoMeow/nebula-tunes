@@ -19,6 +19,7 @@ use std::{
 
 use anyhow::Result;
 use rodio::{Source, buffer::SamplesBuffer, decoder::Decoder, stream::OutputStream};
+use tracing::info;
 
 /// 将原始字节数据解码为可播放的采样缓冲
 fn decode_bytes(bytes: Vec<u8>) -> Result<SamplesBuffer> {
@@ -99,7 +100,7 @@ pub fn run_audio_loop(rx: mpsc::Receiver<Msg>, ready_tx: mpsc::SyncSender<Event>
                     loop {
                         thread::sleep(Duration::from_secs(1));
                         let c = loaded_for_log.load(Ordering::Relaxed);
-                        println!("音频预加载进度：{}/{}", c, total);
+                        info!(current = c, total, "音频预加载进度");
                         if done_for_log.load(Ordering::Relaxed) {
                             break;
                         }
@@ -174,7 +175,7 @@ pub fn run_audio_loop(rx: mpsc::Receiver<Msg>, ready_tx: mpsc::SyncSender<Event>
                 done.store(true, Ordering::Relaxed);
                 let _ = logger.join();
                 let _ = ready_tx.send(Event::PreloadFinished);
-                println!("音频预加载完成");
+                info!("音频预加载完成");
             }
             Msg::Play(path) => {
                 if let Ok(buf) = audio.cached_buffer(&path) {

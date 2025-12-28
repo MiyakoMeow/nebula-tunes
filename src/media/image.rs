@@ -14,6 +14,7 @@ use async_fs as fs;
 use futures_lite::future;
 use image::{ImageBuffer, Luma};
 use imageproc::region_labelling::{Connectivity, connected_components};
+use tracing::info;
 
 use crate::loops::BgaLayer;
 
@@ -248,8 +249,8 @@ pub fn preload_bga_files(cache: Arc<BgaDecodeCache>, files: Vec<PathBuf>) {
         .collect();
     let total = u32::try_from(paths.len()).unwrap_or(u32::MAX);
     if total == 0 {
-        println!("BGA预加载进度：0/0");
-        println!("BGA预加载完成");
+        info!(current = 0, total = 0, "BGA预加载进度");
+        info!("BGA预加载完成");
         return;
     }
 
@@ -262,7 +263,7 @@ pub fn preload_bga_files(cache: Arc<BgaDecodeCache>, files: Vec<PathBuf>) {
         loop {
             thread::sleep(Duration::from_secs(1));
             let c = loaded_for_log.load(std::sync::atomic::Ordering::Relaxed);
-            println!("BGA预加载进度：{}/{}", c, total);
+            info!(current = c, total, "BGA预加载进度");
             if done_for_log.load(std::sync::atomic::Ordering::Relaxed) {
                 break;
             }
@@ -308,5 +309,5 @@ pub fn preload_bga_files(cache: Arc<BgaDecodeCache>, files: Vec<PathBuf>) {
     }
     done.store(true, std::sync::atomic::Ordering::Relaxed);
     let _ = logger.join();
-    println!("BGA预加载完成");
+    info!("BGA预加载完成");
 }
