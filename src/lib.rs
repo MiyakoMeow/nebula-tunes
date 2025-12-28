@@ -5,6 +5,7 @@ pub mod config;
 pub(crate) mod entry;
 pub(crate) mod filesystem;
 pub(crate) mod loops;
+pub(crate) mod media;
 
 #[cfg(not(target_arch = "wasm32"))]
 use std::{

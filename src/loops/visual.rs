@@ -6,11 +6,13 @@
 
 mod bga;
 mod note;
-mod video;
 
-pub use bga::{BgaDecodeCache, BgaDecodedImage, preload_bga_files};
+pub use bga::BgaRenderer;
 pub use note::{base_instances, build_instances_for_processor_with_state};
-pub use video::{DecodedFrame, VideoDecoder};
+
+// Re-export from media module
+pub use crate::media::{BgaDecodeCache, BgaDecodedImage, decode_and_cache, preload_bga_files};
+pub use crate::media::ffmpeg::{DecodedFrame, VideoDecoder};
 
 use std::{
     collections::HashMap,
@@ -221,7 +223,7 @@ impl Renderer {
                 }
                 for (latest_layer, latest_path) in latest {
                     if let Some(decoded) =
-                        bga::decode_and_cache(&bga_cache_for_decode, latest_layer, latest_path)
+                        decode_and_cache(&bga_cache_for_decode, latest_layer, latest_path)
                     {
                         let _ = bga_decoded_tx.send((latest_layer, decoded));
                     }
