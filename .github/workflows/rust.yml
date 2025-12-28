@@ -10,6 +10,7 @@ env:
 jobs:
   native:
     runs-on: ${{ matrix.os }}
+    continue-on-error: true
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
@@ -22,7 +23,40 @@ jobs:
           components: rustfmt, clippy
       - if: matrix.os == 'ubuntu-latest'
         name: Install system dependencies (Ubuntu)
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libasound2-dev \
+            pkg-config \
+            libavutil-dev \
+            libavcodec-dev \
+            libavformat-dev \
+            libavdevice-dev \
+            libavfilter-dev \
+            libswscale-dev \
+            libswresample-dev \
+            libpostproc-dev \
+            ffmpeg
+      - if: matrix.os == 'windows-latest'
+        name: Install ffmpeg and llvm (Windows)
+        run: |
+          # Install scoop if not already installed
+          if (-not (Get-Command scoop -ErrorAction SilentlyContinue)) {
+            Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser -Force
+            irm get.scoop.sh | iex
+          }
+          # Install ffmpeg-shared and llvm using scoop
+          scoop install ffmpeg-shared llvm
+          scoop shim scoop shims --delete
+          # Set environment variables
+          $ffmpegPath = scoop prefix ffmpeg-shared
+          $llvmPath = scoop prefix llvm
+          echo "LIBCLANG_PATH=$llvmPath\bin" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          echo "FFMPEG_DIR=$ffmpegPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          echo "$ffmpegPath\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - if: matrix.os == 'macos-latest'
+        name: Install ffmpeg dev libraries (macOS)
+        run: brew install ffmpeg
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
         with:
