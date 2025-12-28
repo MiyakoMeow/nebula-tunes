@@ -90,7 +90,7 @@ pub fn run_audio_loop(rx: mpsc::Receiver<Msg>, ready_tx: mpsc::SyncSender<Event>
     while let Ok(msg) = rx.recv() {
         match msg {
             Msg::PreloadAll { files } => {
-                let total = files.len() as u32;
+                let total = u32::try_from(files.len()).unwrap_or(u32::MAX);
                 let loaded = Arc::new(AtomicU32::new(0));
                 let done = Arc::new(AtomicBool::new(false));
                 let loaded_for_log = loaded.clone();

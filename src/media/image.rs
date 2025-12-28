@@ -246,7 +246,7 @@ pub fn preload_bga_files(cache: Arc<BgaDecodeCache>, files: Vec<PathBuf>) {
         .collect::<HashSet<_>>()
         .into_iter()
         .collect();
-    let total = paths.len() as u32;
+    let total = u32::try_from(paths.len()).unwrap_or(u32::MAX);
     if total == 0 {
         println!("BGA预加载进度：0/0");
         println!("BGA预加载完成");

@@ -78,7 +78,6 @@ impl Judge {
     #[must_use]
     pub fn preset_impl(&self) -> Box<dyn JudgePreset> {
         match self.preset.as_str() {
-            "LR2" => Box::new(LR2Preset),
             "Standard" => Box::new(StandardPreset),
             _ => Box::new(LR2Preset),
         }

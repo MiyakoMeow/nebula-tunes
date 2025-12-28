@@ -142,7 +142,6 @@ impl ApplicationHandler for Handler {
 
     fn window_event(&mut self, _event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         match event {
-            WindowEvent::CloseRequested => {}
             WindowEvent::Resized(size) => {
                 if let Some(app) = self.app.as_mut() {
                     app.app.resize(size.width, size.height);

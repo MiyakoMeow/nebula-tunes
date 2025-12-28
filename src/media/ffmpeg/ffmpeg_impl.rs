@@ -107,6 +107,7 @@ impl VideoDecoder for FFmpegVideoDecoder {
                         }
                     }
 
+                    #[expect(clippy::cast_precision_loss)]
                     let timestamp = frame.timestamp().unwrap_or(0) as f64;
 
                     self.frame_index += 1;
@@ -141,13 +142,21 @@ impl VideoDecoder for FFmpegVideoDecoder {
     }
 
     fn seek_to_frame(&mut self, frame_idx: u64) -> Result<()> {
+        #[allow(clippy::cast_precision_loss)]
         let target_time = frame_idx as f64 / self.fps;
 
         // 转换为流时间基
         if let Some(video_stream) = self.input.streams().best(ffmpeg::media::Type::Video) {
             let time_base = video_stream.time_base();
-            let timestamp = (target_time / time_base.numerator() as f64
-                * time_base.denominator() as f64) as i64;
+            #[allow(clippy::cast_precision_loss)]
+            let num = time_base.numerator() as f64;
+            #[allow(clippy::cast_precision_loss)]
+            let den = time_base.denominator() as f64;
+            // Clamp and convert timestamp to prevent overflow
+            #[allow(clippy::cast_precision_loss)]
+            #[allow(clippy::cast_possible_truncation)]
+            let timestamp =
+                (target_time / num * den).clamp(i64::MIN as f64, i64::MAX as f64) as i64;
 
             self.input.seek(timestamp, ..)?;
             self.decoder.flush();

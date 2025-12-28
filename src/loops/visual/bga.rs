@@ -363,7 +363,9 @@ impl BgaRenderer {
         );
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let side = super::VISIBLE_HEIGHT;
+        #[expect(clippy::cast_precision_loss)]
         let iw = img.width as f32;
+        #[expect(clippy::cast_precision_loss)]
         let ih = img.height as f32;
         let scale = if iw >= ih { side / iw } else { side / ih };
         let draw_w = iw * scale;

@@ -51,11 +51,14 @@ pub async fn load_bms_and_collect_paths(
     println!("Artist: {:?}", bms.music_info.artist);
     let base_bpm = StartBpmGenerator
         .generate(&bms)
-        .unwrap_or(BaseBpm(120.0.into()));
+        .unwrap_or_else(|| BaseBpm(120.0.into()));
     println!("BaseBpm: {}", base_bpm.value());
     let processor =
         BmsProcessor::new::<KeyLayoutBeat>(&bms, VisibleRangePerBpm::new(&base_bpm, travel));
-    let bms_dir = bms_path.parent().unwrap_or(Path::new(".")).to_path_buf();
+    let bms_dir = bms_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf();
     let mut audio_paths: HashMap<WavId, PathBuf> = HashMap::new();
     let mut bmp_paths: HashMap<BmpId, PathBuf> = HashMap::new();
     let mut bmp_types: HashMap<BmpId, BgaFileType> = HashMap::new();
