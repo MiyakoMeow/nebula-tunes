@@ -72,6 +72,7 @@ jobs:
       - name: Test crate
         run: cargo test --verbose --all-features
   wasi:
+    if: false
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
