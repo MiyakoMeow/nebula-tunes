@@ -1,0 +1,57 @@
+[package]
+name = "nebula-tunes"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+description = "BMS (Be-Music Source) difficulty table parser & fetcher"
+authors = ["MiyakoMeow"]
+repository = "https://github.com/MiyakoMeow/nebula-tunes"
+documentation = "https://docs.rs/nebula-tunes"
+categories = ["games"]
+keywords = ["bms"]
+
+[dependencies]
+anyhow = "1"
+async-fs = "2"
+bms-rs = { git = "https://github.com/MikuroXina/bms-rs" }
+bytemuck = "1"
+chardetng = "0.1"
+encoding_rs = "0.8"
+ffmpeg-next = "8"
+futures-lite = "2"
+gametime = { version = "0.7", features = ["global_reference"] }
+image = "0.25"
+imageproc = "0.25"
+rodio = "0.21"
+serde = { version = "1", features = ["derive"] }
+toml = "0.9"
+tracing = "0.1"
+
+[target.'cfg(target_os = "wasi")'.dependencies]
+getrandom = "0.3"
+wgpu = { version = "28", features = ["serde"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+tracing-wasm = "0.2"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+clap = { version = "4", features = ["derive"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+winit = { version = "0.30", features = ["serde"] }
+
+[target.'cfg(all(not(target_arch = "wasm32"), target_os = "macos"))'.dependencies]
+wgpu = { version = "28", default-features = false, features = [
+  "serde",
+  "metal",
+  "wgsl",
+] }
+
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "macos")))'.dependencies]
+wgpu = { version = "28", default-features = false, features = [
+  "serde",
+  "vulkan",
+  "wgsl",
+] }
+
+[lints]
+workspace = true
