@@ -21,6 +21,7 @@ const fn lane_color(idx: usize) -> [f32; 4] {
 }
 
 /// 构建基础轨道与面板实例
+#[must_use]
 pub fn base_instances() -> Vec<Instance> {
     let mut instances: Vec<Instance> = Vec::with_capacity(1024);
     for i in 0..super::LANE_COUNT {

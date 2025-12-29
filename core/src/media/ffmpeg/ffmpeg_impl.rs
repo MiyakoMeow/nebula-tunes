@@ -28,6 +28,10 @@ pub struct FFmpegVideoDecoder {
 
 impl FFmpegVideoDecoder {
     /// 创建新的 `FFmpeg` 视频解码器
+    ///
+    /// # Errors
+    ///
+    /// 如果FFmpeg初始化失败、文件无法打开或解码器创建失败，返回错误。
     pub fn new(path: &Path) -> Result<Self> {
         ffmpeg::init()?;
 

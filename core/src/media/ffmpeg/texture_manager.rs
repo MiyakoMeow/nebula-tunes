@@ -26,6 +26,7 @@ impl TextureManager {
     /// 创建纹理管理器
     ///
     /// count: 缓冲区数量，建议 2-3 个纹理（双缓冲或三缓冲）
+    #[must_use]
     pub fn new(device: &wgpu::Device, width: u32, height: u32, count: usize) -> Self {
         let mut textures = Vec::with_capacity(count);
         let mut views = Vec::with_capacity(count);
@@ -62,6 +63,10 @@ impl TextureManager {
     /// 上传帧数据到纹理
     ///
     /// 返回当前纹理的视图
+    ///
+    /// # Errors
+    ///
+    /// 如果帧尺寸不匹配或纹理上传失败，返回错误。
     pub fn upload_frame(
         &mut self,
         queue: &wgpu::Queue,

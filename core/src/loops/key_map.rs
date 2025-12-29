@@ -74,11 +74,11 @@ mod tests {
         assert_eq!(key_map.convert(msg), Some(InputMsg::KeyDown(0)));
 
         // 测试未映射的按键
-        let msg = RawInputMsg::Key {
+        let unmapped_msg = RawInputMsg::Key {
             code: RawKeyCode("KeyZ".into()),
             state: KeyState::Pressed,
         };
-        assert_eq!(key_map.convert(msg), None);
+        assert_eq!(key_map.convert(unmapped_msg), None);
     }
 
     #[test]

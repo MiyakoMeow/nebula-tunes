@@ -53,6 +53,12 @@ pub struct BgaDecodeCache {
     inner: Mutex<HashMap<CacheKey, Arc<DecodedImage>>>,
 }
 
+impl Default for BgaDecodeCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BgaDecodeCache {
     /// 创建空缓存
     #[must_use]
@@ -98,6 +104,7 @@ impl BgaDecodeCache {
 }
 
 /// 将指定图层映射到预处理变体
+#[must_use]
 pub const fn layer_to_variant(layer: BgaLayer) -> DecodeVariant {
     match layer {
         BgaLayer::Layer | BgaLayer::Layer2 => DecodeVariant::RemoveBackground,

@@ -101,6 +101,10 @@ pub struct Renderer {
 
 impl Renderer {
     /// 创建渲染器并初始化管线、缓冲与资源
+    ///
+    /// # Errors
+    ///
+    /// 如果着色器编译失败或GPU资源创建失败，返回错误。
     pub fn new(
         surface: wgpu::Surface<'static>,
         device: wgpu::Device,
@@ -433,6 +437,10 @@ impl Renderer {
     }
 
     /// 绘制一帧可视实例
+    ///
+    /// # Errors
+    ///
+    /// 如果渲染操作失败，返回错误。
     pub fn draw(&mut self, instances: &[Instance]) -> Result<()> {
         if let Some(until) = self.poor_until
             && Instant::now() >= until
@@ -525,6 +533,10 @@ impl Renderer {
     }
 
     /// 更新指定图层的 BGA 图片（RGBA8，sRGB）
+    ///
+    /// # Errors
+    ///
+    /// 如果纹理上传失败，返回错误。
     pub fn update_bga_image_from_rgba(
         &mut self,
         layer: BgaLayer,

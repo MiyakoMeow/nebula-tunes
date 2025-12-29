@@ -33,6 +33,7 @@ pub enum KeyState {
 }
 
 /// 原始输入消息（从 winit 传递到 core）
+#[derive(Debug, Clone, PartialEq)]
 pub enum RawInputMsg {
     /// 键盘输入事件
     Key {
@@ -44,6 +45,7 @@ pub enum RawInputMsg {
 }
 
 /// 输入事件消息
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputMsg {
     /// 某轨道按键按下（索引）
     KeyDown(usize),
