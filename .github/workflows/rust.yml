@@ -38,6 +38,7 @@ jobs:
             autoconf-archive \
             automake \
             libtool \
+            libxext-dev \
             libltdl-dev \
             libgl1-mesa-dev \
             libglu1-mesa-dev
