@@ -11,33 +11,33 @@ categories = ["games"]
 keywords = ["bms"]
 
 [dependencies]
-anyhow = "1"
-async-fs = "2"
-bms-rs = { git = "https://github.com/MikuroXina/bms-rs" }
-bytemuck = "1"
-chardetng = "0.1"
-encoding_rs = "0.8"
-ffmpeg-next = "8"
-futures-lite = "2"
-gametime = { version = "0.7", features = ["global_reference"] }
-image = "0.25"
-imageproc = "0.25"
-rodio = "0.21"
-serde = { version = "1", features = ["derive"] }
-toml = "0.9"
-tracing = "0.1"
+anyhow = { workspace = true }
+async-fs = { workspace = true }
+bms-rs = { workspace = true }
+bytemuck = { workspace = true }
+chardetng = { workspace = true }
+encoding_rs = { workspace = true }
+ffmpeg-next = { workspace = true }
+futures-lite = { workspace = true }
+gametime = { workspace = true }
+image = { workspace = true }
+imageproc = { workspace = true }
+rodio = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }
+tracing = { workspace = true }
 
 [target.'cfg(target_os = "wasi")'.dependencies]
-getrandom = "0.3"
+getrandom = { workspace = true }
 wgpu = { version = "28", features = ["serde"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-tracing-wasm = "0.2"
+tracing-wasm = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-clap = { version = "4", features = ["derive"] }
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-winit = { version = "0.30", features = ["serde"] }
+clap = { workspace = true }
+tracing-subscriber = { workspace = true }
+winit = { workspace = true }
 
 [target.'cfg(all(not(target_arch = "wasm32"), target_os = "macos"))'.dependencies]
 wgpu = { version = "28", default-features = false, features = [

@@ -42,6 +42,30 @@ private_doc_tests = "warn"
 invalid_html_tags = "warn"
 bare_urls = "warn"
 
+[workspace.dependencies]
+anyhow = "1"
+async-fs = "2"
+bms-rs = { git = "https://github.com/MikuroXina/bms-rs" }
+bytemuck = "1"
+chardetng = "0.1"
+encoding_rs = "0.8"
+ffmpeg-next = "8"
+futures-lite = "2"
+gametime = { version = "0.7", features = ["global_reference"] }
+getrandom = "0.3"
+image = "0.25"
+imageproc = "0.25"
+rodio = "0.21"
+serde = { version = "1", features = ["derive"] }
+toml = "0.9"
+tracing = "0.1"
+tracing-wasm = "0.2"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+winit = { version = "0.30", features = ["serde"] }
+
+# Desktop-only dependencies
+clap = { version = "4", features = ["derive"] }
+
 [workspace.lints.clippy]
 
 # Restriction
