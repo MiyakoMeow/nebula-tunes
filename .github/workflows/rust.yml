@@ -38,8 +38,12 @@ jobs:
             autoconf-archive \
             automake \
             libtool \
+            libwayland-dev \
+            libxkbcommon-dev \
+            libxft-dev \
             libxext-dev \
             libltdl-dev \
+            libeg1-mesa-dev \
             libgl1-mesa-dev \
             libglu1-mesa-dev
       - name: Install build tools (macOS)
