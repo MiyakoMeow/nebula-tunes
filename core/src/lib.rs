@@ -23,6 +23,15 @@ pub struct Instance {
     pub color: [f32; 4],
 }
 
+// 手动实现 Hash，因为 f32 不支持 Hash
+impl std::hash::Hash for Instance {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        // 使用 bytemuck 将实例转换为字节进行哈希
+        let bytes: &[u8] = bytemuck::bytes_of(self);
+        state.write(bytes);
+    }
+}
+
 /// 将按键映射到轨道索引
 pub(crate) const fn key_to_lane(key: Key) -> Option<usize> {
     match key {

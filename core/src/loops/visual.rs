@@ -15,7 +15,8 @@ pub use crate::media::ffmpeg::{DecodedFrame, VideoDecoder};
 pub use crate::media::{BgaDecodeCache, DecodedImage, decode_and_cache, preload_bga_files};
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, hash_map::DefaultHasher},
+    hash::{Hash, Hasher},
     path::PathBuf,
     sync::{Arc, Mutex, mpsc},
     thread::{self, JoinHandle},
@@ -103,6 +104,8 @@ pub struct Renderer {
     video_decode_thread: Option<JoinHandle<()>>,
     /// 上一次的实例数据（用于差异检测）
     last_instances: Vec<Instance>,
+    /// 上一次实例数据的哈希值（用于快速差异检测）
+    last_instances_hash: u64,
     /// 实例缓冲是否需要更新
     instances_dirty: bool,
 }
@@ -325,6 +328,7 @@ impl Renderer {
             video_frame_rx,
             video_decode_thread: Some(video_decode_thread),
             last_instances: Vec::with_capacity(MAX_INSTANCE_COUNT),
+            last_instances_hash: 0,
             instances_dirty: true,
         })
     }
@@ -505,15 +509,18 @@ impl Renderer {
             .create_view(&wgpu::TextureViewDescriptor::default());
 
         // 差异更新：仅在数据变化时上传到 GPU
+        // 使用快速哈希检测变化，避免 O(n) 完整比较
+        let hash = compute_instances_hash(instances);
         let needs_update = self.instances_dirty
             || instances.len() != self.last_instances.len()
-            || instances != &self.last_instances[..];
+            || hash != self.last_instances_hash;
 
         if needs_update {
             self.queue
                 .write_buffer(&self.instance_buf, 0, bytemuck::cast_slice(instances));
             self.last_instances.clear();
             self.last_instances.extend_from_slice(instances);
+            self.last_instances_hash = hash;
             self.instances_dirty = false;
         }
 
@@ -629,4 +636,23 @@ fn lane_x(idx: usize) -> f32 {
     #[expect(clippy::cast_precision_loss)]
     let idx_f = idx as f32;
     left + idx_f * (LANE_WIDTH + LANE_GAP) - offset
+}
+
+/// 计算实例列表的哈希值（用于快速差异检测）
+///
+/// 使用采样策略，避免遍历所有实例，最多采样 16 个
+fn compute_instances_hash(instances: &[Instance]) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    instances.len().hash(&mut hasher);
+
+    // 采样哈希：最多采样 16 个实例
+    const SAMPLE_SIZE: usize = 16;
+    let step = instances.len().div_ceil(SAMPLE_SIZE).max(1);
+
+    #[expect(clippy::indexing_slicing)] // step_by 保证索引有效
+    for i in (0..instances.len()).step_by(step) {
+        instances[i].hash(&mut hasher);
+    }
+
+    hasher.finish()
 }

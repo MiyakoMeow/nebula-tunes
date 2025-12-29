@@ -30,6 +30,10 @@ pub struct BgaTexturePool {
     max_per_size: usize,
     /// 纹理过期时间
     expire_after: Duration,
+    /// 清理计数器
+    cleanup_counter: u32,
+    /// 清理间隔（每 N 次 acquire 清理一次）
+    cleanup_interval: u32,
 }
 
 impl BgaTexturePool {
@@ -46,6 +50,8 @@ impl BgaTexturePool {
             pool: HashMap::new(),
             max_per_size,
             expire_after,
+            cleanup_counter: 0,
+            cleanup_interval: 32, // 默认每 32 次 acquire 清理一次
         }
     }
 
@@ -64,13 +70,16 @@ impl BgaTexturePool {
             height,
             format,
         };
-        let now = Instant::now();
 
-        // 清理过期条目并尝试复用
+        // 延迟清理：每 N 次 acquire 才清理一次过期纹理
+        self.cleanup_counter = self.cleanup_counter.wrapping_add(1);
+        if self.cleanup_counter >= self.cleanup_interval {
+            self.cleanup_counter = 0;
+            self.cleanup_expired_inner();
+        }
+
+        // 尝试复用
         if let Some(entries) = self.pool.get_mut(&key) {
-            // 移除过期的纹理
-            entries.retain(|e| now.duration_since(e.last_used) < self.expire_after);
-
             // 尝试复用最新释放的纹理
             if let Some(entry) = entries.pop() {
                 return (entry.texture, entry.view);
@@ -130,6 +139,11 @@ impl BgaTexturePool {
     /// 可定期调用此方法以释放不再使用的纹理
     #[allow(dead_code)] // 公共 API，供未来使用
     pub fn cleanup_expired(&mut self) {
+        self.cleanup_expired_inner();
+    }
+
+    /// 内部清理方法（不重置计数器）
+    fn cleanup_expired_inner(&mut self) {
         let now = Instant::now();
         for entries in self.pool.values_mut() {
             entries.retain(|e| now.duration_since(e.last_used) < self.expire_after);
@@ -150,6 +164,8 @@ impl Default for BgaTexturePool {
             pool: HashMap::new(),
             max_per_size: 4,
             expire_after: Duration::from_secs(10),
+            cleanup_counter: 0,
+            cleanup_interval: 32,
         }
     }
 }
