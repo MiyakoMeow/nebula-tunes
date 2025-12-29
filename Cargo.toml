@@ -73,6 +73,7 @@ tracing = "0.1"
 tracing-wasm = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 winit = { version = "0.30", features = ["serde"] }
+wgpu = { version = "28", default-features = false, features = ["wgsl", "serde"] }
 
 # Desktop-only dependencies
 clap = { version = "4", features = ["derive"] }
