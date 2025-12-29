@@ -1,11 +1,13 @@
 //! 事件循环模块入口
 //!
-//! 提供三个子模块：
+//! 提供四个子模块：
 //! - `audio`：音频播放循环
+//! - `key_map`：按键映射模块
 //! - `main_loop`：节拍推进与事件分发循环
 //! - `visual`：事件线程上的渲染循环
 
 pub mod audio;
+pub mod key_map;
 pub mod main_loop;
 pub mod visual;
 
@@ -15,6 +17,30 @@ use std::path::PathBuf;
 pub enum ControlMsg {
     /// 触发主循环开始
     Start,
+}
+
+/// 原始按键代码（平台无关表示）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RawKeyCode(pub String);
+
+/// 原始按键状态
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyState {
+    /// 按键按下
+    Pressed,
+    /// 按键释放
+    Released,
+}
+
+/// 原始输入消息（从 winit 传递到 core）
+pub enum RawInputMsg {
+    /// 键盘输入事件
+    Key {
+        /// 按键代码
+        code: RawKeyCode,
+        /// 按键状态
+        state: KeyState,
+    },
 }
 
 /// 输入事件消息

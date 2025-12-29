@@ -1,10 +1,7 @@
 //! winit 窗口与事件循环入口
 
 #![cfg(not(target_arch = "wasm32"))]
-use std::{
-    collections::HashMap,
-    sync::{Arc, mpsc},
-};
+use std::sync::{Arc, mpsc};
 
 use anyhow::Result;
 use futures_lite::future;
@@ -13,12 +10,12 @@ use winit::{
     dpi::LogicalSize,
     event::{ElementState, WindowEvent},
     event_loop::{ActiveEventLoop, EventLoop},
-    keyboard::{KeyCode, PhysicalKey},
+    keyboard::PhysicalKey,
     window::WindowId,
 };
 
 use nebula_tunes::entry::VisualApp;
-use nebula_tunes::loops::{ControlMsg, InputMsg, VisualMsg, visual};
+use nebula_tunes::loops::{ControlMsg, KeyState, RawInputMsg, RawKeyCode, VisualMsg, visual};
 
 /// 视觉应用状态
 struct App {
@@ -36,33 +33,25 @@ struct Handler {
     visual_rx: Option<mpsc::Receiver<VisualMsg>>,
     /// 控制消息发送端
     control_tx: mpsc::SyncSender<ControlMsg>,
-    /// 输入消息发送端
-    input_tx: mpsc::SyncSender<InputMsg>,
-    /// 键位到轨道索引映射
-    key_map: HashMap<KeyCode, usize>,
+    /// 原始输入消息发送端
+    raw_input_tx: mpsc::SyncSender<RawInputMsg>,
     /// BGA 解码缓存（用于创建渲染器并复用预加载结果）
     bga_cache: Arc<visual::BgaDecodeCache>,
 }
 
 impl Handler {
-    /// 创建视觉事件处理器并建立键位映射
-    fn new(
+    /// 创建视觉事件处理器
+    const fn new(
         visual_rx: mpsc::Receiver<VisualMsg>,
         control_tx: mpsc::SyncSender<ControlMsg>,
-        input_tx: mpsc::SyncSender<InputMsg>,
-        key_codes: Vec<KeyCode>,
+        raw_input_tx: mpsc::SyncSender<RawInputMsg>,
         bga_cache: Arc<visual::BgaDecodeCache>,
     ) -> Self {
-        let mut map = HashMap::new();
-        for (i, code) in key_codes.into_iter().enumerate().take(8) {
-            map.insert(code, i);
-        }
         Self {
             app: None,
             visual_rx: Some(visual_rx),
             control_tx,
-            input_tx,
-            key_map: map,
+            raw_input_tx,
             bga_cache,
         }
     }
@@ -149,19 +138,22 @@ impl ApplicationHandler for Handler {
                 }
             }
             WindowEvent::KeyboardInput { event, .. } => {
-                let lane = match event.physical_key {
-                    PhysicalKey::Code(code) => self.key_map.get(&code).copied(),
-                    _ => None,
-                };
-                if let Some(idx) = lane {
-                    match event.state {
-                        ElementState::Pressed => {
-                            let _ = self.input_tx.try_send(InputMsg::KeyDown(idx));
-                        }
-                        ElementState::Released => {
-                            let _ = self.input_tx.try_send(InputMsg::KeyUp(idx));
-                        }
-                    }
+                if let PhysicalKey::Code(code) = event.physical_key {
+                    // 将 winit::KeyCode 序列化为字符串
+                    let key_str =
+                        serde_json::to_string(&code).unwrap_or_else(|_| format!("{:?}", code));
+
+                    let state = match event.state {
+                        ElementState::Pressed => KeyState::Pressed,
+                        ElementState::Released => KeyState::Released,
+                    };
+
+                    let raw_msg = RawInputMsg::Key {
+                        code: RawKeyCode(key_str),
+                        state,
+                    };
+
+                    let _ = self.raw_input_tx.try_send(raw_msg);
                 }
             }
             WindowEvent::RedrawRequested => {
@@ -184,12 +176,11 @@ impl ApplicationHandler for Handler {
 pub fn run_internal(
     visual_rx: mpsc::Receiver<VisualMsg>,
     control_tx: mpsc::SyncSender<ControlMsg>,
-    input_tx: mpsc::SyncSender<InputMsg>,
-    key_codes: Vec<KeyCode>,
+    raw_input_tx: mpsc::SyncSender<RawInputMsg>,
     bga_cache: Arc<visual::BgaDecodeCache>,
 ) -> Result<()> {
     let event_loop = EventLoop::new()?;
-    let mut handler = Handler::new(visual_rx, control_tx, input_tx, key_codes, bga_cache);
+    let mut handler = Handler::new(visual_rx, control_tx, raw_input_tx, bga_cache);
     event_loop.run_app(&mut handler)?;
     Ok(())
 }

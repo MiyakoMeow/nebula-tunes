@@ -17,7 +17,7 @@ use nebula_tunes::{
     chart::bms::load_bms_and_collect_paths,
     config::load_sys,
     logging,
-    loops::{ControlMsg, InputMsg, VisualMsg, audio, main_loop, visual},
+    loops::{ControlMsg, RawInputMsg, VisualMsg, audio, main_loop, visual},
 };
 
 #[derive(Parser)]
@@ -44,7 +44,7 @@ fn main() -> Result<()> {
         };
     let (control_tx, control_rx) = mpsc::sync_channel::<ControlMsg>(1);
     let (visual_tx, visual_rx) = mpsc::sync_channel::<VisualMsg>(2);
-    let (input_tx, input_rx) = mpsc::sync_channel::<InputMsg>(64);
+    let (raw_input_tx, raw_input_rx) = mpsc::sync_channel::<RawInputMsg>(64);
     let (audio_tx, audio_rx) = mpsc::sync_channel::<audio::Msg>(64);
     let (audio_event_tx, audio_event_rx) = mpsc::sync_channel::<audio::Event>(1);
     let bga_cache = Arc::new(visual::BgaDecodeCache::new());
@@ -53,6 +53,8 @@ fn main() -> Result<()> {
         audio::run_audio_loop(audio_rx, audio_event_tx);
     });
     let bga_cache_for_main = bga_cache.clone();
+    // 准备按键配置
+    let key_strings: Vec<String> = sys.keys.lanes.into_iter().map(|k| k.0).collect();
     let _main_thread = thread::spawn(move || {
         main_loop::run(
             pre_processor,
@@ -62,7 +64,8 @@ fn main() -> Result<()> {
             bga_cache_for_main,
             control_rx,
             visual_tx,
-            input_rx,
+            raw_input_rx,
+            key_strings,
             main_loop::JudgeParams {
                 travel: sys.judge.visible_travel,
                 windows: sys.judge.windows(),
@@ -72,8 +75,6 @@ fn main() -> Result<()> {
         );
     });
 
-    // 将 KeyCode 转换为字符串传递给 winit crate
-    let key_strings: Vec<String> = sys.keys.lanes.into_iter().map(|k| k.0).collect();
-    nebula_tunes_winit::run(visual_rx, control_tx, input_tx, key_strings, bga_cache)?;
+    nebula_tunes_winit::run(visual_rx, control_tx, raw_input_tx, bga_cache)?;
     Ok(())
 }
