@@ -6,6 +6,7 @@
 
 mod bga;
 mod note;
+mod texture_pool;
 
 pub use note::{base_instances, build_instances_for_processor_with_state};
 
@@ -28,6 +29,9 @@ use wgpu::util::DeviceExt;
 use crate::Instance;
 use crate::loops::BgaLayer;
 use crate::media::ffmpeg::{FFmpegVideoDecoder, FrameQueue, TextureManager};
+
+/// 最大实例缓冲大小
+const MAX_INSTANCE_COUNT: usize = 2048;
 
 /// 单个视频播放器状态
 struct VideoPlayer {
@@ -97,6 +101,10 @@ pub struct Renderer {
     pub video_frame_rx: mpsc::Receiver<(BgaLayer, DecodedFrame)>,
     /// 解码线程句柄
     video_decode_thread: Option<JoinHandle<()>>,
+    /// 上一次的实例数据（用于差异检测）
+    last_instances: Vec<Instance>,
+    /// 实例缓冲是否需要更新
+    instances_dirty: bool,
 }
 
 impl Renderer {
@@ -221,7 +229,7 @@ impl Renderer {
         });
         let instance_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("instance-buf"),
-            size: (std::mem::size_of::<Instance>() * 1024) as u64,
+            size: (std::mem::size_of::<Instance>() * MAX_INSTANCE_COUNT) as u64,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -316,6 +324,8 @@ impl Renderer {
             video_cmd_tx,
             video_frame_rx,
             video_decode_thread: Some(video_decode_thread),
+            last_instances: Vec::with_capacity(MAX_INSTANCE_COUNT),
+            instances_dirty: true,
         })
     }
 
@@ -493,8 +503,20 @@ impl Renderer {
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
-        self.queue
-            .write_buffer(&self.instance_buf, 0, bytemuck::cast_slice(instances));
+
+        // 差异更新：仅在数据变化时上传到 GPU
+        let needs_update = self.instances_dirty
+            || instances.len() != self.last_instances.len()
+            || instances != &self.last_instances[..];
+
+        if needs_update {
+            self.queue
+                .write_buffer(&self.instance_buf, 0, bytemuck::cast_slice(instances));
+            self.last_instances.clear();
+            self.last_instances.extend_from_slice(instances);
+            self.instances_dirty = false;
+        }
+
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {

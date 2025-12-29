@@ -12,15 +12,15 @@ use bms_rs::bms::prelude::Key;
 use bytemuck::{Pod, Zeroable};
 
 #[repr(C)]
-#[derive(Clone, Copy, Zeroable, Pod)]
+#[derive(Clone, Copy, Zeroable, Pod, PartialEq)]
 /// 单个矩形实例（位置、大小、颜色）
 pub struct Instance {
     /// 中心坐标（x, y）
-    pos: [f32; 2],
+    pub pos: [f32; 2],
     /// 尺寸（宽, 高）
-    size: [f32; 2],
+    pub size: [f32; 2],
     /// 颜色（RGBA）
-    color: [f32; 4],
+    pub color: [f32; 4],
 }
 
 /// 将按键映射到轨道索引

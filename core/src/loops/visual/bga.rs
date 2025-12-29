@@ -6,9 +6,13 @@
 
 use anyhow::Result;
 use bytemuck::{Pod, Zeroable};
+use std::collections::HashMap;
 
 use crate::loops::BgaLayer;
 use crate::media::ffmpeg::DecodedFrame;
+
+// 使用父模块的纹理池
+pub use super::texture_pool::BgaTexturePool;
 
 /// 图片上传所需的 GPU 上下文
 pub struct UploadCtx<'a> {
@@ -66,6 +70,10 @@ pub struct BgaRenderer {
     layer2: LayerState,
     /// POOR 图层状态
     poor: LayerState,
+    /// 纹理池（用于重用纹理）
+    texture_pool: BgaTexturePool,
+    /// 当前图层的纹理（用于管理和归还到池）
+    current_textures: HashMap<BgaLayer, (wgpu::Texture, wgpu::TextureView, u32, u32)>,
 }
 
 #[repr(C, align(16))]
@@ -318,6 +326,8 @@ impl BgaRenderer {
             layer: new_state(),
             layer2: new_state(),
             poor: new_state(),
+            texture_pool: BgaTexturePool::default(),
+            current_textures: HashMap::new(),
         }
     }
 
@@ -328,20 +338,15 @@ impl BgaRenderer {
         ctx: UploadCtx<'_>,
         img: RgbaImage<'_>,
     ) -> Result<()> {
-        let texture = ctx.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("bga-texture"),
-            size: wgpu::Extent3d {
-                width: img.width,
-                height: img.height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
+        // 从纹理池获取纹理（重用或创建新纹理）
+        let (texture, view) = self.texture_pool.acquire(
+            ctx.device,
+            img.width,
+            img.height,
+            wgpu::TextureFormat::Rgba8UnormSrgb,
+        );
+
+        // 上传数据到纹理
         ctx.queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &texture,
@@ -361,7 +366,8 @@ impl BgaRenderer {
                 depth_or_array_layers: 1,
             },
         );
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        // 计算显示尺寸和位置
         let side = super::VISIBLE_HEIGHT;
         #[expect(clippy::cast_precision_loss)]
         let iw = img.width as f32;
@@ -371,12 +377,32 @@ impl BgaRenderer {
         let draw_w = iw * scale;
         let draw_h = ih * scale;
         let center_x = (super::RIGHT_PANEL_GAP + super::VISIBLE_HEIGHT) / 2.0;
+
+        // 保留旧纹理以便归还到池中
+        let old_texture = self
+            .current_textures
+            .insert(layer, (texture, view.clone(), img.width, img.height));
+
+        // 如果有旧纹理，归还到池中
+        if let Some((old_tex, old_view, old_w, old_h)) = old_texture {
+            self.texture_pool.release(
+                old_tex,
+                old_view,
+                old_w,
+                old_h,
+                wgpu::TextureFormat::Rgba8UnormSrgb,
+            );
+        }
+
+        // 更新图层状态
         let state = self.state_mut(layer);
         state.texture_view = Some(view);
         state.rect = [center_x, 0.0, draw_w, draw_h];
         if layer != BgaLayer::Poor {
             state.visible = true;
         }
+
+        // 重建 bind group
         self.rebuild_bind_group(ctx.device, ctx.screen_buffer);
         Ok(())
     }
