@@ -1,0 +1,107 @@
+name: Update vcpkg Dependencies
+
+on:
+  schedule:
+    # 每月 1 号 UTC 00:00 运行
+    - cron: '0 0 1 * *'
+  workflow_dispatch: # 允许手动触发
+
+jobs:
+  update-vcpkg:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Get latest vcpkg commit
+        id: vcpkg-commit
+        run: |
+          echo "Fetching latest vcpkg commit..."
+          LATEST_COMMIT=$(git ls-remote https://github.com/microsoft/vcpkg.git HEAD | awk '{print $1}')
+          echo "commit=$LATEST_COMMIT" >> $GITHUB_OUTPUT
+          echo "Latest vcpkg commit: $LATEST_COMMIT"
+
+      - name: Update vcpkg-configuration.json
+        run: |
+          LATEST_COMMIT="${{ steps.vcpkg-commit.outputs.commit }}"
+          jq --arg commit "$LATEST_COMMIT" \
+            '.default-registry.baseline = $commit' \
+            vcpkg-configuration.json > vcpkg-configuration.json.tmp
+          mv vcpkg-configuration.json.tmp vcpkg-configuration.json
+          echo "Updated baseline to: $LATEST_COMMIT"
+
+      - name: Check for changes
+        id: check-changes
+        run: |
+          if [[ -n $(git diff --name-only) ]]; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "Changed files:"
+            git diff --name-only
+          else
+            echo "changed=false" >> $GITHUB_OUTPUT
+            echo "No changes detected"
+          fi
+
+      - name: Get FFmpeg version from vcpkg
+        if: steps.check-changes.outputs.changed == 'true'
+        id: ffmpeg-version
+        run: |
+          echo "Fetching FFmpeg version from vcpkg..."
+          # 获取 vcpkg ffmpeg port 的最新版本
+          FFPEG_VERSION=$(curl -s "https://raw.githubusercontent.com/microsoft/vcpkg/${{ steps.vcpkg-commit.outputs.commit }}/ports/ffmpeg/vcpkg.json" | jq -r '.version')
+          echo "version=$FFPEG_VERSION" >> $GITHUB_OUTPUT
+          echo "Latest FFmpeg version: $FFPEG_VERSION"
+
+      - name: Update vcpkg.json if FFmpeg version changed
+        if: steps.check-changes.outputs.changed == 'true'
+        run: |
+          CURRENT_VERSION=$(jq -r '.overrides[0].version' vcpkg.json)
+          LATEST_VERSION="${{ steps.ffmpeg-version.outputs.version }}"
+
+          if [[ "$CURRENT_VERSION" != "$LATEST_VERSION" ]]; then
+            echo "Updating FFmpeg from $CURRENT_VERSION to $LATEST_VERSION"
+            jq --arg version "$LATEST_VERSION" \
+              '.overrides[0].version = $version | .dependencies[0]["version>="] = $version' \
+              vcpkg.json > vcpkg.json.tmp
+            mv vcpkg.json.tmp vcpkg.json
+          else
+            echo "FFmpeg version is already up to date: $CURRENT_VERSION"
+          fi
+
+      - name: Create Pull Request
+        if: steps.check-changes.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: |
+            chore: update vcpkg baseline
+
+            - Update vcpkg baseline to ${{ steps.vcpkg-commit.outputs.commit }}
+            - Update FFmpeg to version ${{ steps.ffmpeg-version.outputs.version }}
+          title: "chore: update vcpkg dependencies"
+          body: |
+            ## Summary
+            This PR updates vcpkg dependencies to their latest versions.
+
+            ### Changes
+            - **vcpkg baseline**: Updated to `${{ steps.vcpkg-commit.outputs.commit }}`
+            - **FFmpeg**: Updated to version `${{ steps.ffmpeg-version.outputs.version }}`
+
+            ### Verification
+            Please review the changes and ensure all tests pass before merging.
+          branch: update/vcpkg-dependencies
+          delete-branch: true
+          draft: false
+
+      - name: Summary
+        if: steps.check-changes.outputs.changed == 'true'
+        run: |
+          echo "## vcpkg Update Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **vcpkg baseline**: \`${{ steps.vcpkg-commit.outputs.commit }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **FFmpeg version**: \`${{ steps.ffmpeg-version.outputs.version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "A pull request has been created to review these changes." >> $GITHUB_STEP_SUMMARY
