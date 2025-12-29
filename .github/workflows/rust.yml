@@ -14,6 +14,13 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
+        include:
+          - os: ubuntu-latest
+            vcpkg-triplet: x64-linux
+          - os: windows-latest
+            vcpkg-triplet: x64-windows-static
+          - os: macos-latest
+            vcpkg-triplet: x64-osx
     steps:
       - uses: actions/checkout@v6
       - name: Setup rustfmt and clippy
@@ -21,42 +28,39 @@ jobs:
         with:
           toolchain: stable
           components: rustfmt, clippy
-      - if: matrix.os == 'ubuntu-latest'
-        name: Install system dependencies (Ubuntu)
+      - name: Run vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgJsonGlob: '**/vcpkg.json'
+          vcpkgConfigurationJsonGlob: '**/vcpkg-configuration.json'
+          doNotCache: false
+      - name: Setup vcpkg environment variables
+        shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libasound2-dev \
-            pkg-config \
-            libavutil-dev \
-            libavcodec-dev \
-            libavformat-dev \
-            libavdevice-dev \
-            libavfilter-dev \
-            libswscale-dev \
-            libswresample-dev \
-            libpostproc-dev \
-            ffmpeg
-      - if: matrix.os == 'windows-latest'
-        name: Install ffmpeg and llvm (Windows)
-        run: |
-          # Install scoop if not already installed
-          if (-not (Get-Command scoop -ErrorAction SilentlyContinue)) {
-            Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser -Force
-            irm get.scoop.sh | iex
-          }
-          # Install ffmpeg-shared and llvm using scoop
-          scoop install ffmpeg-shared llvm
-          scoop shim scoop shims --delete
-          # Set environment variables
-          $ffmpegPath = scoop prefix ffmpeg-shared
-          $llvmPath = scoop prefix llvm
-          echo "LIBCLANG_PATH=$llvmPath\bin" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          echo "FFMPEG_DIR=$ffmpegPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          echo "$ffmpegPath\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-      - if: matrix.os == 'macos-latest'
-        name: Install ffmpeg dev libraries (macOS)
-        run: brew install ffmpeg
+          echo "VCPKG_ROOT=$VCPKG_ROOT" >> $GITHUB_ENV
+          echo "VCPKG_DEFAULT_TRIPLET=${{ matrix.vcpkg-triplet }}" >> $GITHUB_ENV
+
+          # 设置 pkg-config 路径（vcpkg 安装的库包含 .pc 文件）
+          if [ "$RUNNER_OS" != "Windows" ]; then
+            echo "$VCPKG_ROOT/installed/${{ matrix.vcpkg-triplet }}/lib/pkgconfig" >> $GITHUB_PATH
+            echo "$VCPKG_ROOT/installed/${{ matrix.vcpkg-triplet }}/share/pkgconfig" >> $GITHUB_PATH
+            export PKG_CONFIG_PATH="$VCPKG_ROOT/installed/${{ matrix.vcpkg-triplet }}/lib/pkgconfig:$VCPKG_ROOT/installed/${{ matrix.vcpkg-triplet }}/share/pkgconfig"
+            echo "PKG_CONFIG_PATH=$PKG_CONFIG_PATH" >> $GITHUB_ENV
+          fi
+
+          # Windows 特殊配置
+          if [ "$RUNNER_OS" == "Windows" ]; then
+            echo "LIBCLANG_PATH=$VCPKG_ROOT/installed/${{ matrix.vcpkg-triplet }}/bin" >> $GITHUB_ENV
+            echo "FFMPEG_DIR=$VCPKG_ROOT/installed/${{ matrix.vcpkg-triplet }}" >> $GITHUB_ENV
+            echo "$VCPKG_ROOT/installed/${{ matrix.vcpkg-triplet }}/bin" >> $GITHUB_PATH
+          else
+            echo "FFMPEG_DIR=$VCPKG_ROOT/installed/${{ matrix.vcpkg-triplet }}" >> $GITHUB_ENV
+          fi
+
+          # 验证库已安装
+          echo "=== Verifying vcpkg installation ==="
+          ls -la "$VCPKG_ROOT/installed/${{ matrix.vcpkg-triplet }}/include/libavcodec"
+          ls -la "$VCPKG_ROOT/installed/${{ matrix.vcpkg-triplet }}/lib" | grep -i ffmpeg || echo "ffmpeg libraries check"
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
         with:
@@ -64,6 +68,11 @@ jobs:
           workspaces: |
             . -> target
       - name: Build crate
+        env:
+          FFMPEG_DIR: ${{ env.FFMPEG_DIR }}
+          LIBCLANG_PATH: ${{ env.LIBCLANG_PATH }}
+          PKG_CONFIG_PATH: ${{ env.PKG_CONFIG_PATH }}
+          PKG_CONFIG_LIBDIR: ${{ env.PKG_CONFIG_PATH }}
         run: cargo build --verbose
       - name: Format Check
         run: cargo fmt --check

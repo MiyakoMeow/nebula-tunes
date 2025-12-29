@@ -1,0 +1,22 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "nebula-tunes",
+  "version-string": "0.1.0",
+  "dependencies": [
+    {
+      "name": "ffmpeg",
+      "features": ["all-gpl"],
+      "version>=": "7.1.2"
+    },
+    {
+      "name": "llvm",
+      "version>=": "18.1.6"
+    }
+  ],
+  "overrides": [
+    {
+      "name": "ffmpeg",
+      "version": "7.1.2"
+    }
+  ]
+}
