@@ -17,6 +17,13 @@ use winit::{
 use nebula_tunes::entry::VisualApp;
 use nebula_tunes::loops::{ControlMsg, KeyState, RawInputMsg, RawKeyCode, VisualMsg, visual};
 
+/// 将 winit `KeyCode` 转换为配置文件格式的字符串
+fn key_code_to_string(code: winit::keyboard::KeyCode) -> String {
+    serde_json::to_string(&code)
+        .map(|s| s.trim_matches('"').to_string())
+        .unwrap_or_else(|_| format!("{:?}", code))
+}
+
 /// 视觉应用状态
 struct App {
     /// 窗口实例
@@ -139,9 +146,7 @@ impl ApplicationHandler for Handler {
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 if let PhysicalKey::Code(code) = event.physical_key {
-                    // 将 winit::KeyCode 序列化为字符串
-                    let key_str =
-                        serde_json::to_string(&code).unwrap_or_else(|_| format!("{:?}", code));
+                    let key_str = key_code_to_string(code);
 
                     let state = match event.state {
                         ElementState::Pressed => KeyState::Pressed,
