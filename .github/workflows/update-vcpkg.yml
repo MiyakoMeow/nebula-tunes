@@ -58,13 +58,13 @@ jobs:
       - name: Update vcpkg.json if FFmpeg version changed
         if: steps.check-changes.outputs.changed == 'true'
         run: |
-          CURRENT_VERSION=$(jq -r '.overrides[0].version' vcpkg.json)
+          CURRENT_VERSION=$(jq -r '.dependencies[] | select(.name == "ffmpeg") | ."version>="' vcpkg.json)
           LATEST_VERSION="${{ steps.ffmpeg-version.outputs.version }}"
 
           if [[ "$CURRENT_VERSION" != "$LATEST_VERSION" ]]; then
             echo "Updating FFmpeg from $CURRENT_VERSION to $LATEST_VERSION"
             jq --arg version "$LATEST_VERSION" \
-              '.overrides[0].version = $version | .dependencies[0]["version>="] = $version' \
+              '(.dependencies[] | select(.name == "ffmpeg") | ."version>=") = $version' \
               vcpkg.json > vcpkg.json.tmp
             mv vcpkg.json.tmp vcpkg.json
           else

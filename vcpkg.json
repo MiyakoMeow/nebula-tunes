@@ -12,11 +12,5 @@
       "name": "llvm",
       "version>=": "18.1.6"
     }
-  ],
-  "overrides": [
-    {
-      "name": "ffmpeg",
-      "version": "7.1.2"
-    }
   ]
 }
