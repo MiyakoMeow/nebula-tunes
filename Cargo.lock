@@ -1814,6 +1814,19 @@ dependencies = [
  "tracing-subscriber",
  "tracing-wasm",
  "wgpu",
+]
+
+[[package]]
+name = "nebula-tunes-winit"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "futures-lite",
+ "nebula-tunes",
+ "serde_json",
+ "tracing",
+ "wgpu",
  "winit",
 ]
 

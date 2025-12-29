@@ -17,8 +17,8 @@ use winit::{
     window::WindowId,
 };
 
-use crate::entry::VisualApp;
-use crate::loops::{ControlMsg, InputMsg, VisualMsg, visual};
+use nebula_tunes::entry::VisualApp;
+use nebula_tunes::loops::{ControlMsg, InputMsg, VisualMsg, visual};
 
 /// 视觉应用状态
 struct App {
@@ -180,8 +180,8 @@ impl ApplicationHandler for Handler {
     }
 }
 
-/// 运行 winit 事件循环并驱动渲染与输入分发
-pub fn run(
+/// 运行 winit 事件循环并驱动渲染与输入分发（内部实现）
+pub fn run_internal(
     visual_rx: mpsc::Receiver<VisualMsg>,
     control_tx: mpsc::SyncSender<ControlMsg>,
     input_tx: mpsc::SyncSender<InputMsg>,

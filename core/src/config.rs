@@ -6,11 +6,10 @@ use std::time::Duration;
 use anyhow::Result;
 use serde::{Deserialize, Deserializer};
 
-#[cfg(not(target_arch = "wasm32"))]
-use winit::keyboard::KeyCode;
-
-/// WASM 目标上的按键代码占位类型（仅用于反序列化）
-#[cfg(target_arch = "wasm32")]
+/// 按键代码（用于反序列化配置文件）
+///
+/// 在桌面平台上，此类型用于从 TOML 配置文件中读取按键代码。
+/// 实际的 `winit::KeyCode` 转换由 winit crate 处理。
 #[derive(Deserialize, Clone)]
 pub struct KeyCode(pub String);
 

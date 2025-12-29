@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
-members = ["core"]
-default-members = ["core"]
+members = ["core", "winit"]
+default-members = ["winit"]
 
 [workspace.package]
 version = "0.1.0"
