@@ -1,14 +1,14 @@
 [package]
 name = "nebula-tunes"
-version = "0.1.0"
-edition = "2024"
-license = "AGPL-3.0-or-later"
-description = "BMS (Be-Music Source) difficulty table parser & fetcher"
-authors = ["MiyakoMeow"]
-repository = "https://github.com/MiyakoMeow/nebula-tunes"
-documentation = "https://docs.rs/nebula-tunes"
-categories = ["games"]
-keywords = ["bms"]
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+documentation.workspace = true
+categories.workspace = true
+keywords.workspace = true
+description.workspace = true
 
 [dependencies]
 anyhow = { workspace = true }

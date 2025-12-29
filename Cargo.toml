@@ -3,6 +3,17 @@ resolver = "3"
 members = ["core"]
 default-members = ["core"]
 
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+authors = ["MiyakoMeow"]
+repository = "https://github.com/MiyakoMeow/nebula-tunes"
+documentation = "https://docs.rs/nebula-tunes"
+categories = ["games"]
+keywords = ["bms"]
+description = "BMS (Be-Music Source) player"
+
 # Enable a small amount of optimization in the dev profile.
 [profile.dev]
 opt-level = 1
