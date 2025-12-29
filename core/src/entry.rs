@@ -1,7 +1,5 @@
 //! 程序入口模块
 
-pub mod winit;
-
 use std::sync::mpsc;
 
 use crate::Instance;
@@ -19,10 +17,7 @@ pub struct VisualApp {
 
 impl VisualApp {
     /// 创建视觉应用
-    pub(crate) fn new(
-        window_renderer: visual::Renderer,
-        visual_rx: mpsc::Receiver<VisualMsg>,
-    ) -> Self {
+    pub fn new(window_renderer: visual::Renderer, visual_rx: mpsc::Receiver<VisualMsg>) -> Self {
         Self {
             window_renderer,
             visual_rx,
@@ -31,12 +26,12 @@ impl VisualApp {
     }
 
     /// 处理窗口大小变化
-    pub(crate) fn resize(&mut self, width: u32, height: u32) {
+    pub fn resize(&mut self, width: u32, height: u32) {
         self.window_renderer.resize(width, height);
     }
 
     /// 执行一次渲染：消费消息、更新资源并绘制
-    pub(crate) fn redraw(&mut self) {
+    pub fn redraw(&mut self) {
         while let Ok(msg) = self.visual_rx.try_recv() {
             match msg {
                 VisualMsg::Instances(instances) => {

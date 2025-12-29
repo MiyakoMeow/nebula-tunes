@@ -28,9 +28,17 @@ pub trait VideoDecoder {
     ///
     /// 返回 Some(DecodedFrame) 表示成功解码一帧
     /// 返回 None 表示已到达文件末尾
+    ///
+    /// # Errors
+    ///
+    /// 如果解码失败，返回错误。
     fn decode_next_frame(&mut self) -> Result<Option<DecodedFrame>>;
 
     /// 跳转到指定帧
+    ///
+    /// # Errors
+    ///
+    /// 如果跳转失败，返回错误。
     #[allow(dead_code)]
     fn seek_to_frame(&mut self, frame_idx: u64) -> Result<()>;
 
