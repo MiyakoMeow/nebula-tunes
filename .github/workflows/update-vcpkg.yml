@@ -24,6 +24,14 @@ jobs:
           echo "commit=$LATEST_COMMIT" >> $GITHUB_OUTPUT
           echo "Latest vcpkg commit: $LATEST_COMMIT"
 
+      - name: Generate branch name with timestamp
+        id: branch-name
+        run: |
+          TIMESTAMP=$(date -u +"%Y-%m-%d-%H%M%S")
+          BRANCH_NAME="update/vcpkg-${TIMESTAMP}"
+          echo "name=$BRANCH_NAME" >> $GITHUB_OUTPUT
+          echo "Generated branch name: $BRANCH_NAME"
+
       - name: Update vcpkg-configuration.json
         run: |
           LATEST_COMMIT="${{ steps.vcpkg-commit.outputs.commit }}"
@@ -45,56 +53,109 @@ jobs:
             echo "No changes detected"
           fi
 
-      - name: Get FFmpeg version from vcpkg
-        if: steps.check-changes.outputs.changed == 'true'
-        id: ffmpeg-version
-        run: |
-          echo "Fetching FFmpeg version from vcpkg..."
-          # 获取 vcpkg ffmpeg port 的最新版本
-          FFPEG_VERSION=$(curl -s "https://raw.githubusercontent.com/microsoft/vcpkg/${{ steps.vcpkg-commit.outputs.commit }}/ports/ffmpeg/vcpkg.json" | jq -r '.version')
-          echo "version=$FFPEG_VERSION" >> $GITHUB_OUTPUT
-          echo "Latest FFmpeg version: $FFPEG_VERSION"
-
-      - name: Update vcpkg.json if FFmpeg version changed
+      - name: Commit changes
         if: steps.check-changes.outputs.changed == 'true'
         run: |
-          CURRENT_VERSION=$(jq -r '.dependencies[] | select(.name == "ffmpeg") | ."version>="' vcpkg.json)
-          LATEST_VERSION="${{ steps.ffmpeg-version.outputs.version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b ${{ steps.branch-name.outputs.name }}
+          git add vcpkg-configuration.json
+          git commit -m "chore: update vcpkg baseline
 
-          if [[ "$CURRENT_VERSION" != "$LATEST_VERSION" ]]; then
-            echo "Updating FFmpeg from $CURRENT_VERSION to $LATEST_VERSION"
-            jq --arg version "$LATEST_VERSION" \
-              '(.dependencies[] | select(.name == "ffmpeg") | ."version>=") = $version' \
-              vcpkg.json > vcpkg.json.tmp
-            mv vcpkg.json.tmp vcpkg.json
-          else
-            echo "FFmpeg version is already up to date: $CURRENT_VERSION"
-          fi
+          - Update vcpkg baseline to ${{ steps.vcpkg-commit.outputs.commit }}"
+
+      - name: Push branch
+        if: steps.check-changes.outputs.changed == 'true'
+        run: |
+          git push origin ${{ steps.branch-name.outputs.name }}
 
       - name: Create Pull Request
+        id: create-pr
         if: steps.check-changes.outputs.changed == 'true'
-        uses: peter-evans/create-pull-request@v7
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          commit-message: |
-            chore: update vcpkg baseline
+        run: |
+          PR_NUMBER=$(gh pr create \
+            --title "chore: update vcpkg baseline" \
+            --body "## Summary
 
-            - Update vcpkg baseline to ${{ steps.vcpkg-commit.outputs.commit }}
-            - Update FFmpeg to version ${{ steps.ffmpeg-version.outputs.version }}
-          title: "chore: update vcpkg dependencies"
-          body: |
-            ## Summary
-            This PR updates vcpkg dependencies to their latest versions.
+          This PR updates vcpkg baseline to the latest version.
 
-            ### Changes
-            - **vcpkg baseline**: Updated to `${{ steps.vcpkg-commit.outputs.commit }}`
-            - **FFmpeg**: Updated to version `${{ steps.ffmpeg-version.outputs.version }}`
+          ### Changes
+          - **vcpkg baseline**: \`${{ steps.vcpkg-commit.outputs.commit }}\`
+          - **Branch**: \`${{ steps.branch-name.outputs.name }}\`
 
-            ### Verification
-            Please review the changes and ensure all tests pass before merging.
-          branch: update/vcpkg-dependencies
-          delete-branch: true
-          draft: false
+          ### Automated
+          This PR was automatically created by the [Update vcpkg Dependencies](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) workflow.
+
+          ---" \
+            --base main \
+            --head ${{ steps.branch-name.outputs.name }} \
+            --label "dependencies" \
+            --label "automated")
+          echo "number=$PR_NUMBER" >> $GITHUB_OUTPUT
+          echo "Created PR #$PR_NUMBER"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Wait for CI checks
+        if: steps.check-changes.outputs.changed == 'true'
+        run: |
+          PR_NUMBER="${{ steps.create-pr.outputs.number }}"
+          echo "Waiting for CI checks on PR #$PR_NUMBER..."
+
+          # 等待最多 60 分钟（3600 秒）
+          TIMEOUT=3600
+          ELAPSED=0
+          INTERVAL=30
+
+          while [ $ELAPSED -lt $TIMEOUT ]; do
+            # 获取 PR 的 CI 状态
+            CI_STATUS=$(gh pr view $PR_NUMBER --json statusCheckRollup -q '.statusCheckRollup[0].status' 2>/dev/null || echo "PENDING")
+
+            echo "Current CI status: $CI_STATUS (elapsed: ${ELAPSED}s)"
+
+            case "$CI_STATUS" in
+              "COMPLETED")
+                echo "CI checks completed!"
+                break
+                ;;
+              "FAILED"|"FAILURE")
+                echo "CI checks failed!"
+                exit 1
+                ;;
+              *)
+                echo "Still waiting..."
+                sleep $INTERVAL
+                ELAPSED=$((ELAPSED + INTERVAL))
+                ;;
+            esac
+          done
+
+          if [ $ELAPSED -ge $TIMEOUT ]; then
+            echo "Timeout waiting for CI checks"
+            exit 1
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check CI result and merge
+        if: steps.check-changes.outputs.changed == 'true'
+        run: |
+          PR_NUMBER="${{ steps.create-pr.outputs.number }}"
+
+          # 检查所有 CI 是否通过
+          CI_RESULT=$(gh pr view $PR_NUMBER --json statusCheckRollup -q '.statusCheckRollup[] | select(.status == "COMPLETED") | .conclusion' | grep -v "FAILURE" | head -n 1)
+
+          if [[ "$CI_RESULT" == "SUCCESS" ]] || [[ -z "$(gh pr view $PR_NUMBER --json statusCheckRollup -q '.statusCheckRollup[] | select(.conclusion == "FAILURE")')" ]]; then
+            echo "All CI checks passed! Merging PR #$PR_NUMBER..."
+            gh pr merge $PR_NUMBER --merge --delete-branch
+            echo "PR merged successfully"
+          else
+            echo "Some CI checks failed. PR will not be merged."
+            gh pr view $PR_NUMBER --json statusCheckRollup
+            exit 1
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Summary
         if: steps.check-changes.outputs.changed == 'true'
@@ -102,6 +163,14 @@ jobs:
           echo "## vcpkg Update Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "- **vcpkg baseline**: \`${{ steps.vcpkg-commit.outputs.commit }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **FFmpeg version**: \`${{ steps.ffmpeg-version.outputs.version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch**: \`${{ steps.branch-name.outputs.name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Pull Request**: #${{ steps.create-pr.outputs.number }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "A pull request has been created to review these changes." >> $GITHUB_STEP_SUMMARY
+          echo "✅ PR was created and merged automatically after CI passed." >> $GITHUB_STEP_SUMMARY
+
+      - name: No changes summary
+        if: steps.check-changes.outputs.changed == 'false'
+        run: |
+          echo "## vcpkg Update Check" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "No changes detected. vcpkg baseline is already up to date." >> $GITHUB_STEP_SUMMARY
