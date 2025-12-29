@@ -40,8 +40,7 @@ jobs:
             libtool \
             libltdl-dev \
             libgl1-mesa-dev \
-            libglu1-mesa-dev \
-            libgl1-mesa-glx
+            libglu1-mesa-dev
       - name: Install build tools (macOS)
         if: matrix.os == 'macos-latest'
         run: brew install nasm autoconf autoconf-archive automake libtool
