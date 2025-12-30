@@ -3,12 +3,14 @@
 //! 负责图像解码、缓存和背景移除处理
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashSet,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::Arc,
     thread,
     time::Duration,
 };
+
+use dashmap::DashMap;
 
 use async_fs as fs;
 use futures_lite::future;
@@ -49,8 +51,8 @@ struct CacheKey {
 
 /// BGA 图片解码缓存（跨线程共享）
 pub struct BgaDecodeCache {
-    /// (路径, 变体) 到已解码图片的映射
-    inner: Mutex<HashMap<CacheKey, Arc<DecodedImage>>>,
+    /// `DashMap` 提供无锁并发读取
+    inner: DashMap<CacheKey, Arc<DecodedImage>>,
 }
 
 impl Default for BgaDecodeCache {
@@ -64,7 +66,7 @@ impl BgaDecodeCache {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            inner: Mutex::new(HashMap::new()),
+            inner: DashMap::new(),
         }
     }
 
@@ -79,7 +81,7 @@ impl BgaDecodeCache {
             path: path.to_path_buf(),
             variant,
         };
-        self.inner.lock().ok()?.get(&key).cloned()
+        self.inner.get(&key).map(|v| v.clone())
     }
 
     /// 写入指定变体的缓存条目并返回共享引用
@@ -96,9 +98,8 @@ impl BgaDecodeCache {
             width,
             height,
         });
-        if let Ok(mut map) = self.inner.lock() {
-            map.insert(CacheKey { path, variant }, decoded.clone());
-        }
+        self.inner
+            .insert(CacheKey { path, variant }, decoded.clone());
         decoded
     }
 }
@@ -179,6 +180,7 @@ fn preprocess_rgba(mut rgba: Vec<u8>, width: u32, height: u32, variant: DecodeVa
 }
 
 /// 解码图片并写入缓存（缓存命中则直接返回）
+#[must_use]
 pub fn decode_and_cache(
     cache: &BgaDecodeCache,
     layer: BgaLayer,
