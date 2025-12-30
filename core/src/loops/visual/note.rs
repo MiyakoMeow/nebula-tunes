@@ -4,6 +4,7 @@
 
 use bms_rs::chart_process::ChartProcessor;
 use bms_rs::chart_process::prelude::*;
+use num::ToPrimitive;
 
 use crate::Instance;
 use crate::key_to_lane;
@@ -61,8 +62,7 @@ pub fn build_instances_for_processor_with_state(
                 continue;
             };
             let x = super::lane_x(idx);
-            #[allow(clippy::cast_possible_truncation)]
-            let r = ratio.as_f64() as f32;
+            let r: f32 = ratio.start().value().to_f32().unwrap_or(0.0);
             let r = r.clamp(0.0, 1.0);
             let y = -super::VISIBLE_HEIGHT / 2.0 + r * super::VISIBLE_HEIGHT;
             instances.push(Instance {

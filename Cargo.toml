@@ -67,6 +67,7 @@ gametime = { version = "0.7", features = ["global_reference"] }
 getrandom = "0.3"
 image = "0.25"
 imageproc = "0.25"
+num = "0.4"
 rodio = "0.21"
 serde = { version = "1", features = ["derive"] }
 toml = "0.9"
