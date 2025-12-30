@@ -1,4 +1,4 @@
-//! Nebula Tunes library target used for WASM compilation checks.
+//! Nebula Tunes library target.
 
 pub mod chart;
 pub mod config;
@@ -42,17 +42,4 @@ pub(crate) const fn key_to_lane(key: Key) -> Option<usize> {
         },
         _ => None,
     }
-}
-
-#[cfg(target_os = "wasi")]
-/// WASM 构建冒烟检查入口
-///
-/// # Errors
-///
-/// - `getrandom` 获取随机数失败
-pub fn wasm_smoke_checks() -> Result<(), getrandom::Error> {
-    let _ = bms_rs::bms::default_config();
-    let mut buf = [0u8; 16];
-    getrandom::fill(&mut buf)?;
-    Ok(())
 }

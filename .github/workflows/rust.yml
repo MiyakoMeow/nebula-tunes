@@ -71,27 +71,3 @@ jobs:
         run: cargo clippy --all-targets --verbose -- -D warnings
       - name: Test crate
         run: cargo test --verbose --all-features
-  wasi:
-    if: false
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - name: Setup rustfmt and clippy
-        uses: dtolnay/rust-toolchain@v1
-        with:
-          toolchain: stable
-          components: rustfmt, clippy
-          targets: wasm32-wasip1
-      - name: Cache cargo build
-        uses: Swatinem/rust-cache@v2
-        with:
-          cache-on-failure: true
-          workspaces: |
-            . -> target
-      - name: Build crate (WASI)
-        run: cargo build-wasm --verbose
-      - name: Format Check
-        run: cargo fmt --check
-      - name: "Clippy Check (WASI)"
-        if: false
-        run: cargo clippy-wasm --verbose -- -D warnings

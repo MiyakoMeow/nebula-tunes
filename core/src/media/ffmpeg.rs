@@ -6,13 +6,9 @@ mod decoder;
 mod frame_queue;
 mod texture_manager;
 
-#[cfg(not(target_arch = "wasm32"))]
 mod ffmpeg_impl;
 
 pub use decoder::{DecodedFrame, VideoDecoder};
-
-#[cfg(not(target_arch = "wasm32"))]
 pub use ffmpeg_impl::FFmpegVideoDecoder;
-
 pub use frame_queue::FrameQueue;
 pub use texture_manager::TextureManager;

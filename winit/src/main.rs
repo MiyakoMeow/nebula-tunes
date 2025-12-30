@@ -1,7 +1,5 @@
 //! # Nebula Tunes 主程序
 
-#![cfg(not(target_arch = "wasm32"))]
-
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
