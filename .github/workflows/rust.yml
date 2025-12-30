@@ -31,7 +31,9 @@ jobs:
         name: Cache Scoop packages
         uses: actions/cache@v4
         with:
-          path: ~/scoop
+          path: |
+            ~/scoop/apps
+            ~/scoop/cache
           key: ${{ runner.os }}-scoop-${{ hashFiles('.github/workflows/rust.yml') }}
           restore-keys: |
             ${{ runner.os }}-scoop-
@@ -56,16 +58,15 @@ jobs:
         name: Cache Homebrew packages
         uses: actions/cache@v4
         with:
-          path: |
-            ~/Library/Caches/Homebrew
-            /usr/local/Cellar
-            /opt/homebrew/Cellar
+          path: ~/Library/Caches/Homebrew
           key: ${{ runner.os }}-brew-${{ hashFiles('.github/workflows/rust.yml') }}
           restore-keys: |
             ${{ runner.os }}-brew-
       - if: matrix.os == 'macos-latest'
         name: Install ffmpeg dev libraries (macOS)
-        run: brew install ffmpeg
+        run: |
+          brew install ffmpeg || brew upgrade ffmpeg
+          brew link ffmpeg || brew link --overwrite ffmpeg
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
         with:
