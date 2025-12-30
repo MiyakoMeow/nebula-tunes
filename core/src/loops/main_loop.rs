@@ -15,6 +15,7 @@ use std::{
 use bms_rs::chart_process::prelude::*;
 use bms_rs::chart_process::types::PlayheadEvent;
 use gametime::{TimeSpan, TimeStamp};
+use num::ToPrimitive;
 use tracing::debug;
 
 use crate::chart::bms::BgaFileType;
@@ -162,8 +163,7 @@ pub fn run(
                             if lane != idx {
                                 continue;
                             }
-                            #[allow(clippy::cast_possible_truncation)]
-                            let r = ratio.as_f64() as f32;
+                            let r: f32 = ratio.start().value().to_f32().unwrap_or(0.0);
                             if !(0.0..=1.0).contains(&r) {
                                 continue;
                             }
@@ -333,8 +333,7 @@ pub fn run(
             let mut count = 0usize;
 
             for (_, r) in p.visible_events() {
-                #[allow(clippy::cast_possible_truncation)]
-                let rf = r.as_f64() as f32;
+                let rf: f32 = r.start().value().to_f32().unwrap_or(0.0);
                 min_r = min_r.min(rf);
                 max_r = max_r.max(rf);
                 count += 1;

@@ -457,7 +457,7 @@ dependencies = [
 [[package]]
 name = "bms-rs"
 version = "0.10.1"
-source = "git+https://github.com/MikuroXina/bms-rs#bf5f5b6776584a7969e042889879eab73883963f"
+source = "git+https://github.com/MikuroXina/bms-rs#430c7b6161c1d4ffb3ba7d9dcac01d82fd971b37"
 dependencies = [
  "ariadne",
  "chumsky",
@@ -1834,6 +1834,7 @@ dependencies = [
  "getrandom 0.3.4",
  "image",
  "imageproc",
+ "num",
  "rodio",
  "serde",
  "toml",
@@ -4408,9 +4409,9 @@ dependencies = [
 
 [[package]]
 name = "zmij"
-version = "1.0.2"
+version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0f4a4e8e9dc5c62d159f04fcdbe07f4c3fb710415aab4754bf11505501e3251d"
+checksum = "e9747e91771f56fd7893e1164abd78febd14a670ceec257caad15e051de35f06"
 
 [[package]]
 name = "zune-core"
