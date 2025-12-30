@@ -29,24 +29,14 @@ rodio = { workspace = true }
 serde = { workspace = true }
 toml = { workspace = true }
 tracing = { workspace = true }
-
-[target.'cfg(target_os = "wasi")'.dependencies]
-getrandom = { workspace = true }
-wgpu = { workspace = true }
-
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-tracing-wasm = { workspace = true }
-wgpu = { workspace = true, features = ["webgl"] }
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 clap = { workspace = true }
 tracing-subscriber = { workspace = true }
 
-[target.'cfg(all(not(target_arch = "wasm32"), target_os = "macos"))'.dependencies]
-wgpu = { workspace = true, features = ["metal"] }
-
-[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "macos")))'.dependencies]
+[target.'cfg(not(target_os = "macos"))'.dependencies]
 wgpu = { workspace = true, features = ["vulkan"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+wgpu = { workspace = true, features = ["metal"] }
 
 [lints]
 workspace = true

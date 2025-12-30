@@ -106,20 +106,9 @@ pub fn parse_sys_str(s: &str) -> Result<Sys> {
 /// - 读取文件失败
 /// - TOML 解析失败
 /// - 配置字段反序列化失败
-#[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
 pub fn load_sys(path: &Path) -> Result<Sys> {
     let s = std::fs::read_to_string(path)?;
     parse_sys_str(&s)
-}
-
-/// 从指定路径加载系统配置（TOML）
-///
-/// # Errors
-///
-/// - WASM 目标不支持直接读取本地文件
-#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
-pub fn load_sys(_path: &Path) -> Result<Sys> {
-    anyhow::bail!("load_sys is not available on wasm")
 }
 
 /// 反序列化毫秒为 `TimeSpan`

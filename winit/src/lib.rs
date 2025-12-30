@@ -2,8 +2,6 @@
 //!
 //! 提供 winit 窗口系统与事件循环的桌面平台实现
 
-#![cfg(not(target_arch = "wasm32"))]
-
 mod app;
 
 use anyhow::Result;

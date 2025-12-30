@@ -1,41 +1,17 @@
 //! 日志系统初始化模块
-//!
-//! 提供统一的日志初始化接口，支持桌面和 WASM 平台
 
 /// 初始化全局日志系统
 ///
-/// # 平台差异
-///
-/// - **桌面平台**：使用 `tracing-subscriber`，支持环境变量 `RUST_LOG` 控制日志级别
-/// - **WASM 平台**：使用 `tracing-wasm`，简化的日志配置
+/// 使用 `tracing-subscriber`，支持环境变量 `RUST_LOG` 控制日志级别
 ///
 /// # 使用方式
 ///
 /// ```bash
-/// # 桌面平台环境变量控制
 /// RUST_LOG=info cargo run          # info 及以上级别
 /// RUST_LOG=debug cargo run         # debug 及以上级别
 /// RUST_LOG=warn cargo run          # 仅警告和错误
 /// ```
 pub fn init_logging() {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        init_desktop_logging();
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    {
-        init_wasm_logging();
-    }
-}
-
-/// 桌面平台日志初始化
-///
-/// 使用 `tracing-subscriber` 配置日志系统：
-/// - 从环境变量 `RUST_LOG` 读取日志级别
-/// - 使用自定义格式：时间（不含日期）+ 模块路径 + 日志级别 + 消息
-#[cfg(not(target_arch = "wasm32"))]
-fn init_desktop_logging() {
     use tracing_subscriber::fmt::time::FormatTime;
     use tracing_subscriber::{EnvFilter, fmt};
 
@@ -75,12 +51,4 @@ fn init_desktop_logging() {
         .with_timer(CustomTime) // 使用自定义时间格式
         .compact() // 紧凑格式，去除多余空行
         .init();
-}
-
-/// WASM 平台日志初始化
-///
-/// 使用 `tracing-wasm` 配置简化的日志系统
-#[cfg(target_arch = "wasm32")]
-fn init_wasm_logging() {
-    tracing_wasm::set_as_global_default();
 }
