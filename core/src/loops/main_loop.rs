@@ -40,6 +40,20 @@ struct GameState {
     gauge: f32,
     /// 连击数
     combo: u32,
+    /// 缓存的统计数据（每秒更新一次）
+    ratio_stats: RatioStats,
+    /// 统计更新计数器
+    stats_update_counter: u32,
+}
+
+/// 比率统计数据
+struct RatioStats {
+    /// 最小比率
+    min_ratio: f32,
+    /// 最大比率
+    max_ratio: f32,
+    /// 可见事件数量
+    visible_count: usize,
 }
 
 /// 运行主循环
@@ -92,6 +106,12 @@ pub fn run(
         pressed: [false; 8],
         gauge: 0.5,
         combo: 0,
+        ratio_stats: RatioStats {
+            min_ratio: 1.0,
+            max_ratio: 0.0,
+            visible_count: 0,
+        },
+        stats_update_counter: 0,
     };
     let mut last_log_sec: u64 = 0;
     let mut audio_plays_this_sec: u32 = 0;
@@ -283,30 +303,48 @@ pub fn run(
         let elapsed = now.checked_elapsed_since(start).unwrap_or(TimeSpan::ZERO);
         let nanos = elapsed.as_nanos().max(0);
         let sec = u64::try_from(nanos).unwrap_or(u64::MAX) / 1_000_000_000;
+
+        // 每帧更新统计计数器
+        state.stats_update_counter = state.stats_update_counter.wrapping_add(1);
+
         if sec != last_log_sec {
-            let visible = p.visible_events().count();
-            let mut min_r: f32 = 1.0;
-            let mut max_r: f32 = 0.0;
-            for (_, r) in p.visible_events() {
-                #[allow(clippy::cast_possible_truncation)]
-                let rf = r.as_f64() as f32;
-                if rf < min_r {
-                    min_r = rf;
-                }
-                if rf > max_r {
-                    max_r = rf;
-                }
-            }
+            // 使用缓存的统计数据
             debug!(
                 elapsed_sec = sec,
-                visible,
-                ratio_min = min_r,
-                ratio_max = max_r,
+                visible = state.ratio_stats.visible_count,
+                ratio_min = state.ratio_stats.min_ratio,
+                ratio_max = state.ratio_stats.max_ratio,
                 audio_plays = audio_plays_this_sec,
                 "主循环性能统计"
             );
             audio_plays_this_sec = 0;
             last_log_sec = sec;
+
+            // 重置统计，为下一秒做准备
+            state.ratio_stats = RatioStats {
+                min_ratio: 1.0,
+                max_ratio: 0.0,
+                visible_count: 0,
+            };
+        } else if state.stats_update_counter.is_multiple_of(60) {
+            // 每秒更新一次统计数据（约 60 帧）
+            let mut min_r = 1.0f32;
+            let mut max_r = 0.0f32;
+            let mut count = 0usize;
+
+            for (_, r) in p.visible_events() {
+                #[allow(clippy::cast_possible_truncation)]
+                let rf = r.as_f64() as f32;
+                min_r = min_r.min(rf);
+                max_r = max_r.max(rf);
+                count += 1;
+            }
+
+            state.ratio_stats = RatioStats {
+                min_ratio: min_r,
+                max_ratio: max_r,
+                visible_count: count,
+            };
         }
     }
 }

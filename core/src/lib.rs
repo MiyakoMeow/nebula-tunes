@@ -12,15 +12,24 @@ use bms_rs::bms::prelude::Key;
 use bytemuck::{Pod, Zeroable};
 
 #[repr(C)]
-#[derive(Clone, Copy, Zeroable, Pod)]
+#[derive(Clone, Copy, Zeroable, Pod, PartialEq)]
 /// 单个矩形实例（位置、大小、颜色）
 pub struct Instance {
     /// 中心坐标（x, y）
-    pos: [f32; 2],
+    pub pos: [f32; 2],
     /// 尺寸（宽, 高）
-    size: [f32; 2],
+    pub size: [f32; 2],
     /// 颜色（RGBA）
-    color: [f32; 4],
+    pub color: [f32; 4],
+}
+
+// 手动实现 Hash，因为 f32 不支持 Hash
+impl std::hash::Hash for Instance {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        // 使用 bytemuck 将实例转换为字节进行哈希
+        let bytes: &[u8] = bytemuck::bytes_of(self);
+        state.write(bytes);
+    }
 }
 
 /// 将按键映射到轨道索引

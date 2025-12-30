@@ -59,6 +59,7 @@ async-fs = "2"
 bms-rs = { git = "https://github.com/MikuroXina/bms-rs" }
 bytemuck = "1"
 chardetng = "0.1"
+dashmap = "6"
 encoding_rs = "0.8"
 ffmpeg-next = "8"
 futures-lite = "2"

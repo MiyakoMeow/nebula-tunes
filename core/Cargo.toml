@@ -16,6 +16,7 @@ async-fs = { workspace = true }
 bms-rs = { workspace = true }
 bytemuck = { workspace = true }
 chardetng = { workspace = true }
+dashmap = { workspace = true }
 encoding_rs = { workspace = true }
 ffmpeg-next = { workspace = true }
 futures-lite = { workspace = true }
