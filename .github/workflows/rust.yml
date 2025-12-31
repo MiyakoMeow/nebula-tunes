@@ -22,21 +22,21 @@ jobs:
           toolchain: stable
           components: rustfmt, clippy
       - if: matrix.os == 'ubuntu-latest'
-        name: Install system dependencies (Ubuntu)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libasound2-dev \
-            pkg-config \
-            libavutil-dev \
-            libavcodec-dev \
-            libavformat-dev \
-            libavdevice-dev \
-            libavfilter-dev \
-            libswscale-dev \
-            libswresample-dev \
-            libpostproc-dev \
-            ffmpeg
+        name: Cache APT packages
+        uses: awalsh128/cache-apt-pkgs-action@latest
+        with:
+          packages: libasound2-dev pkg-config libavutil-dev libavcodec-dev libavformat-dev libavdevice-dev libavfilter-dev libswscale-dev libswresample-dev libpostproc-dev ffmpeg
+          version: 1.0
+      - if: matrix.os == 'windows-latest'
+        name: Cache Scoop packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/scoop/apps
+            ~/scoop/cache
+          key: ${{ runner.os }}-scoop-${{ hashFiles('.github/workflows/rust.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-scoop-
       - if: matrix.os == 'windows-latest'
         name: Install ffmpeg and llvm (Windows)
         run: |
@@ -55,8 +55,18 @@ jobs:
           echo "FFMPEG_DIR=$ffmpegPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           echo "$ffmpegPath\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - if: matrix.os == 'macos-latest'
+        name: Cache Homebrew packages
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/Homebrew
+          key: ${{ runner.os }}-brew-${{ hashFiles('.github/workflows/rust.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-brew-
+      - if: matrix.os == 'macos-latest'
         name: Install ffmpeg dev libraries (macOS)
-        run: brew install ffmpeg
+        run: |
+          brew install ffmpeg || brew upgrade ffmpeg
+          brew link ffmpeg || brew link --overwrite ffmpeg
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
         with:
