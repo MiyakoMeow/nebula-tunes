@@ -5,9 +5,11 @@
 //! - 在 `about_to_wait` 请求重绘以维持刷新
 
 mod bga;
+mod gpu;
 mod note;
 mod texture_pool;
 
+pub use gpu::{GpuContext, init_gpu};
 pub use note::{base_instances, build_instances_for_processor_with_state};
 
 // Re-export from media module
@@ -116,131 +118,141 @@ impl Renderer {
     /// # Errors
     ///
     /// 如果着色器编译失败或GPU资源创建失败，返回错误。
-    pub fn new(
-        surface: wgpu::Surface<'static>,
-        device: wgpu::Device,
-        queue: wgpu::Queue,
-        config: wgpu::SurfaceConfiguration,
-        bga_cache: Arc<BgaDecodeCache>,
-    ) -> Result<Self> {
-        let format = config.format;
-        surface.configure(&device, &config);
+    pub fn new(gpu_ctx: GpuContext, bga_cache: Arc<BgaDecodeCache>) -> Result<Self> {
+        let format = gpu_ctx.config.format;
+        gpu_ctx.surface.configure(&gpu_ctx.device, &gpu_ctx.config);
 
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("rect-shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../rect.wgsl").into()),
-        });
-        let screen_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        let shader = gpu_ctx
+            .device
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("rect-shader"),
+                source: wgpu::ShaderSource::Wgsl(include_str!("../rect.wgsl").into()),
+            });
+        let screen_buffer = gpu_ctx.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("screen-uniform"),
             size: std::mem::size_of::<ScreenUniform>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("rect-bgl"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        });
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("rect-bg"),
-            layout: &bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: screen_buffer.as_entire_binding(),
-            }],
-        });
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("rect-pl"),
-            bind_group_layouts: &[&bind_group_layout],
-            immediate_size: 0,
-        });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("rect-pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                buffers: &[
-                    wgpu::VertexBufferLayout {
-                        array_stride: std::mem::size_of::<[f32; 2]>() as u64,
-                        step_mode: wgpu::VertexStepMode::Vertex,
-                        attributes: &[wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x2,
-                            offset: 0,
-                            shader_location: 0,
-                        }],
-                    },
-                    wgpu::VertexBufferLayout {
-                        array_stride: std::mem::size_of::<Instance>() as u64,
-                        step_mode: wgpu::VertexStepMode::Instance,
-                        attributes: &[
-                            wgpu::VertexAttribute {
+        let bind_group_layout =
+            gpu_ctx
+                .device
+                .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    label: Some("rect-bgl"),
+                    entries: &[wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::VERTEX,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    }],
+                });
+        let bind_group = gpu_ctx
+            .device
+            .create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("rect-bg"),
+                layout: &bind_group_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: screen_buffer.as_entire_binding(),
+                }],
+            });
+        let pipeline_layout =
+            gpu_ctx
+                .device
+                .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("rect-pl"),
+                    bind_group_layouts: &[&bind_group_layout],
+                    immediate_size: 0,
+                });
+        let pipeline = gpu_ctx
+            .device
+            .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("rect-pipeline"),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_main"),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    buffers: &[
+                        wgpu::VertexBufferLayout {
+                            array_stride: std::mem::size_of::<[f32; 2]>() as u64,
+                            step_mode: wgpu::VertexStepMode::Vertex,
+                            attributes: &[wgpu::VertexAttribute {
                                 format: wgpu::VertexFormat::Float32x2,
                                 offset: 0,
-                                shader_location: 1,
-                            },
-                            wgpu::VertexAttribute {
-                                format: wgpu::VertexFormat::Float32x2,
-                                offset: 8,
-                                shader_location: 2,
-                            },
-                            wgpu::VertexAttribute {
-                                format: wgpu::VertexFormat::Float32x4,
-                                offset: 16,
-                                shader_location: 3,
-                            },
-                        ],
-                    },
-                ],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+                                shader_location: 0,
+                            }],
+                        },
+                        wgpu::VertexBufferLayout {
+                            array_stride: std::mem::size_of::<Instance>() as u64,
+                            step_mode: wgpu::VertexStepMode::Instance,
+                            attributes: &[
+                                wgpu::VertexAttribute {
+                                    format: wgpu::VertexFormat::Float32x2,
+                                    offset: 0,
+                                    shader_location: 1,
+                                },
+                                wgpu::VertexAttribute {
+                                    format: wgpu::VertexFormat::Float32x2,
+                                    offset: 8,
+                                    shader_location: 2,
+                                },
+                                wgpu::VertexAttribute {
+                                    format: wgpu::VertexFormat::Float32x4,
+                                    offset: 16,
+                                    shader_location: 3,
+                                },
+                            ],
+                        },
+                    ],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_main"),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            });
         let quad_vertices: [[f32; 2]; 4] = [[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]];
-        let quad_vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("quad-vb"),
-            contents: bytemuck::cast_slice(&quad_vertices),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
+        let quad_vb = gpu_ctx
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("quad-vb"),
+                contents: bytemuck::cast_slice(&quad_vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
         let indices: [u16; 6] = [0, 1, 2, 0, 2, 3];
-        let idx_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("quad-ib"),
-            contents: bytemuck::cast_slice(&indices),
-            usage: wgpu::BufferUsages::INDEX,
-        });
-        let instance_buf = device.create_buffer(&wgpu::BufferDescriptor {
+        let idx_buf = gpu_ctx
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("quad-ib"),
+                contents: bytemuck::cast_slice(&indices),
+                usage: wgpu::BufferUsages::INDEX,
+            });
+        let instance_buf = gpu_ctx.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("instance-buf"),
             size: (std::mem::size_of::<Instance>() * MAX_INSTANCE_COUNT) as u64,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let bga = bga::BgaRenderer::new(&device, &queue, &screen_buffer, format);
+        let bga = bga::BgaRenderer::new(&gpu_ctx.device, &gpu_ctx.queue, &screen_buffer, format);
         #[expect(clippy::cast_precision_loss)]
-        let w = config.width as f32;
+        let w = gpu_ctx.config.width as f32;
         #[expect(clippy::cast_precision_loss)]
-        let h = config.height as f32;
+        let h = gpu_ctx.config.height as f32;
         let logical_size = [w, h];
 
         let (bga_decode_tx, bga_decode_rx) = mpsc::channel::<(BgaLayer, PathBuf)>();
@@ -306,10 +318,10 @@ impl Renderer {
         });
 
         Ok(Self {
-            surface,
-            device,
-            queue,
-            config,
+            surface: gpu_ctx.surface,
+            device: gpu_ctx.device,
+            queue: gpu_ctx.queue,
+            config: gpu_ctx.config,
             pipeline,
             bind_group,
             screen_buffer,

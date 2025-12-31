@@ -1803,7 +1803,6 @@ dependencies = [
  "nebula-tunes",
  "serde_json",
  "tracing",
- "wgpu",
  "winit",
 ]
 

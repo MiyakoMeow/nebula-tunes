@@ -8,18 +8,15 @@ repository.workspace = true
 
 [dependencies]
 nebula-tunes = { path = "../core", version = "0.1.0" }
+
 anyhow = { workspace = true }
-futures-lite = { workspace = true }
-tracing = { workspace = true }
-serde_json = "1"
 clap = { workspace = true }
+futures-lite = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
 
 # Desktop-only dependencies
 winit = { workspace = true }
-wgpu = { workspace = true, features = ["vulkan"] }
-
-[target.'cfg(target_os = "macos")'.dependencies]
-wgpu = { workspace = true, features = ["metal"] }
 
 [lints]
 workspace = true
