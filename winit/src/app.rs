@@ -3,18 +3,19 @@
 use std::sync::{Arc, mpsc};
 
 use anyhow::Result;
-use futures_lite::future;
 use winit::{
     application::ApplicationHandler,
     dpi::LogicalSize,
-    event::{ElementState, WindowEvent},
+    event::{ElementState, MouseScrollDelta, Touch, WindowEvent},
     event_loop::{ActiveEventLoop, EventLoop},
     keyboard::PhysicalKey,
     window::WindowId,
 };
 
 use nebula_tunes::entry::VisualApp;
-use nebula_tunes::loops::{ControlMsg, KeyState, RawInputMsg, RawKeyCode, VisualMsg, visual};
+use nebula_tunes::loops::{
+    ControlMsg, KeyState, MouseButton, RawInputMsg, RawKeyCode, TouchPhase, VisualMsg, visual,
+};
 
 /// 将 winit `KeyCode` 转换为配置文件格式的字符串
 fn key_code_to_string(code: winit::keyboard::KeyCode) -> String {
@@ -43,6 +44,8 @@ struct Handler {
     raw_input_tx: mpsc::SyncSender<RawInputMsg>,
     /// BGA 解码缓存（用于创建渲染器并复用预加载结果）
     bga_cache: Arc<visual::BgaDecodeCache>,
+    /// 光标位置缓存
+    cursor_position: (f64, f64),
 }
 
 impl Handler {
@@ -59,6 +62,7 @@ impl Handler {
             control_tx,
             raw_input_tx,
             bga_cache,
+            cursor_position: (0.0, 0.0),
         }
     }
 }
@@ -77,57 +81,28 @@ impl ApplicationHandler for Handler {
             Err(_) => return,
         };
 
-        let renderer = match (|| -> Result<visual::Renderer> {
-            let instance = wgpu::Instance::default();
-            let surface = unsafe {
-                instance.create_surface_unsafe(
-                    wgpu::SurfaceTargetUnsafe::from_window(&window)
-                        .map_err(|e| anyhow::anyhow!(e.to_string()))?,
-                )
-            }?;
-            let adapter =
-                future::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-                    power_preference: wgpu::PowerPreference::HighPerformance,
-                    force_fallback_adapter: false,
-                    compatible_surface: Some(&surface),
-                }))
-                .map_err(|e| anyhow::anyhow!("request_adapter failed: {:?}", e))?;
-            let (device, queue) =
-                future::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-                    required_features: wgpu::Features::empty(),
-                    required_limits: wgpu::Limits::default(),
-                    experimental_features: wgpu::ExperimentalFeatures::disabled(),
-                    memory_hints: wgpu::MemoryHints::default(),
-                    trace: wgpu::Trace::Off,
-                    label: None,
-                }))?;
-            let size = window.inner_size();
-            let caps = surface.get_capabilities(&adapter);
-            let format = caps
-                .formats
-                .first()
-                .copied()
-                .unwrap_or(wgpu::TextureFormat::Bgra8Unorm);
-            let config = wgpu::SurfaceConfiguration {
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-                format,
-                width: size.width,
-                height: size.height,
-                present_mode: wgpu::PresentMode::FifoRelaxed,
-                alpha_mode: wgpu::CompositeAlphaMode::Opaque,
-                view_formats: vec![],
-                desired_maximum_frame_latency: 2,
-            };
-            visual::Renderer::new(surface, device, queue, config, self.bga_cache.clone())
-        })() {
-            Ok(r) => r,
-            Err(_) => return,
+        let size = window.inner_size();
+        let gpu_ctx = match visual::init_gpu(&window, (size.width, size.height)) {
+            Ok(ctx) => ctx,
+            Err(e) => {
+                tracing::error!("GPU initialization failed: {:?}", e);
+                return;
+            }
         };
 
         let rx = match self.visual_rx.take() {
             Some(r) => r,
             None => return,
         };
+
+        let renderer = match visual::Renderer::new(gpu_ctx, self.bga_cache.clone()) {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::error!("Renderer creation failed: {:?}", e);
+                return;
+            }
+        };
+
         self.app = Some(App {
             window,
             app: VisualApp::new(renderer, rx),
@@ -160,6 +135,75 @@ impl ApplicationHandler for Handler {
                     let _ = self.raw_input_tx.try_send(raw_msg);
                 }
             }
+            // 鼠标移动事件
+            WindowEvent::CursorMoved { position, .. } => {
+                self.cursor_position = (position.x, position.y);
+                let raw_msg = RawInputMsg::Mouse {
+                    button: None,
+                    state: KeyState::Pressed,
+                    position: (position.x, position.y),
+                    delta: None,
+                };
+                let _ = self.raw_input_tx.try_send(raw_msg);
+            }
+            // 鼠标按钮事件
+            WindowEvent::MouseInput { state, button, .. } => {
+                let key_state = match state {
+                    ElementState::Pressed => KeyState::Pressed,
+                    ElementState::Released => KeyState::Released,
+                };
+                let mouse_button = match button {
+                    winit::event::MouseButton::Left => MouseButton::Left,
+                    winit::event::MouseButton::Right => MouseButton::Right,
+                    winit::event::MouseButton::Middle => MouseButton::Middle,
+                    winit::event::MouseButton::Other(code) => MouseButton::Other(code),
+                    winit::event::MouseButton::Back => MouseButton::Other(3),
+                    winit::event::MouseButton::Forward => MouseButton::Other(4),
+                };
+                let raw_msg = RawInputMsg::Mouse {
+                    button: Some(mouse_button),
+                    state: key_state,
+                    position: self.cursor_position,
+                    delta: None,
+                };
+                let _ = self.raw_input_tx.try_send(raw_msg);
+            }
+            // 鼠标滚轮事件
+            WindowEvent::MouseWheel { delta, .. } => {
+                let (dx, dy) = match delta {
+                    MouseScrollDelta::LineDelta(x, y) => (x, y),
+                    MouseScrollDelta::PixelDelta(pos) => (pos.x as f32, pos.y as f32),
+                };
+                let raw_msg = RawInputMsg::Mouse {
+                    button: None,
+                    state: KeyState::Pressed,
+                    position: self.cursor_position,
+                    delta: Some((dx, dy)),
+                };
+                let _ = self.raw_input_tx.try_send(raw_msg);
+            }
+            // 触控输入事件
+            WindowEvent::Touch(Touch {
+                id,
+                location,
+                phase,
+                ..
+            }) => {
+                let touch_phase = match phase {
+                    winit::event::TouchPhase::Started => TouchPhase::Started,
+                    winit::event::TouchPhase::Moved => TouchPhase::Moved,
+                    winit::event::TouchPhase::Ended => TouchPhase::Ended,
+                    winit::event::TouchPhase::Cancelled => TouchPhase::Cancelled,
+                };
+                let raw_msg = RawInputMsg::Touch {
+                    id,
+                    position: (location.x, location.y),
+                    phase: touch_phase,
+                };
+                let _ = self.raw_input_tx.try_send(raw_msg);
+            }
+            // 游戏手柄连接事件（winit 0.30 暂不支持 WindowEvent::Gamepad）
+            // TODO: 添加手柄轮询逻辑或监听连接状态变化
             WindowEvent::RedrawRequested => {
                 if let Some(app) = self.app.as_mut() {
                     app.app.redraw();

@@ -54,6 +54,10 @@ impl KeyMap {
                     KeyState::Released => Some(InputMsg::KeyUp(idx)),
                 }
             }
+            // 鼠标、触控、手柄输入目前不转换为游戏逻辑输入
+            RawInputMsg::Mouse { .. } | RawInputMsg::Touch { .. } | RawInputMsg::Gamepad { .. } => {
+                None
+            }
         }
     }
 }

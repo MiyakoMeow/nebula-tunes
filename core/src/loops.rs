@@ -42,6 +42,75 @@ pub enum RawInputMsg {
         /// 按键状态
         state: KeyState,
     },
+    /// 鼠标输入事件
+    Mouse {
+        /// 鼠标按钮状态
+        button: Option<MouseButton>,
+        /// 按钮状态
+        state: KeyState,
+        /// 光标位置 (x, y)
+        position: (f64, f64),
+        /// 滚轮增量 (水平, 垂直)
+        delta: Option<(f32, f32)>,
+    },
+    /// 触控输入事件
+    Touch {
+        /// 触点 ID（支持多点触控）
+        id: u64,
+        /// 触点位置 (x, y)
+        position: (f64, f64),
+        /// 触控阶段
+        phase: TouchPhase,
+    },
+    /// 游戏手柄事件
+    Gamepad {
+        /// 手柄 ID
+        id: usize,
+        /// 手柄事件类型
+        event: GamepadEvent,
+    },
+}
+
+/// 鼠标按钮类型
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MouseButton {
+    /// 左键
+    Left,
+    /// 右键
+    Right,
+    /// 中键
+    Middle,
+    /// 其他按钮
+    Other(u16),
+}
+
+/// 触控阶段
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TouchPhase {
+    /// 触控开始
+    Started,
+    /// 触控移动
+    Moved,
+    /// 触控结束
+    Ended,
+    /// 触控取消
+    Cancelled,
+}
+
+/// 游戏手柄事件类型
+#[derive(Debug, Clone, PartialEq)]
+pub enum GamepadEvent {
+    /// 按钮状态变化
+    Button {
+        /// 按钮索引
+        button: u8,
+        /// 按钮状态
+        state: KeyState,
+    },
+    /// 摇杆移动（左摇杆 x, 左摇杆 y, 右摇杆 x, 右摇杆 y）
+    AxisMove([f32; 4]),
+    /// 手柄连接/断开
+    ConnectionChanged(bool),
 }
 
 /// 输入事件消息
