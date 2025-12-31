@@ -126,7 +126,7 @@ single_char_pattern = "warn"
 wildcard_imports = "warn"
 
 # Pedantic (Applicability: MaybeIncorrect)
-cast_possible_truncation = "warn"
+cast_possible_truncation = "allow"
 cast_possible_wrap = "allow"
 cast_precision_loss = "warn"
 cast_ptr_alignment = "warn"
