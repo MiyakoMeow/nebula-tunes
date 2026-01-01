@@ -69,6 +69,14 @@ pub fn run(
     // 创建 PageManager
     let mut page_manager = PageManager::new(visual_tx.clone(), audio_tx.clone());
 
+    // 配置 GamePage 不缓存（每次重新开始）
+    page_manager.set_page_config(
+        crate::pages::PageId::Game,
+        crate::pages::PageConfig {
+            cache_enabled: false,
+        },
+    );
+
     // 如果有 processor，直接创建游戏页面并设置
     if let Some(proc) = processor {
         let game_page = GamePageBuilder::new(

@@ -26,6 +26,21 @@ pub enum PageId {
     SongSelect,
 }
 
+/// 页面配置
+#[derive(Debug, Clone)]
+pub struct PageConfig {
+    /// 是否启用页面实例缓存
+    pub cache_enabled: bool,
+}
+
+impl Default for PageConfig {
+    fn default() -> Self {
+        Self {
+            cache_enabled: true,
+        }
+    }
+}
+
 /// 页面上下文：包含页面运行所需的所有共享资源
 pub struct PageContext {
     /// 视觉消息发送端（用于渲染更新）
@@ -175,10 +190,14 @@ pub trait PageBuilder: Any {
 
 /// 页面管理器：协调页面生命周期和转换
 pub struct PageManager {
-    /// 当前活动页面
-    current_page: Option<Box<dyn Page>>,
-    /// 页面栈（用于模态对话框）
-    page_stack: Vec<Box<dyn Page>>,
+    /// 页面实例缓存（统一管理所有页面）
+    cached_pages: HashMap<PageId, Box<dyn Page>>,
+    /// 当前活动页面 ID
+    current_page_id: Option<PageId>,
+    /// 页面栈（存储 ID，实例从 `cached_pages` 获取）
+    page_stack: Vec<PageId>,
+    /// 页面配置
+    page_configs: HashMap<PageId, PageConfig>,
     /// 页面构建器注册表
     builders: HashMap<PageId, Box<dyn PageBuilder>>,
     /// 视觉消息发送端
@@ -199,8 +218,10 @@ impl PageManager {
         audio_tx: mpsc::SyncSender<crate::loops::audio::Msg>,
     ) -> Self {
         Self {
-            current_page: None,
+            cached_pages: HashMap::new(),
+            current_page_id: None,
             page_stack: Vec::new(),
+            page_configs: HashMap::new(),
             builders: HashMap::new(),
             visual_tx,
             audio_tx,
@@ -220,6 +241,41 @@ impl PageManager {
         Ok(())
     }
 
+    /// 设置页面配置
+    pub fn set_page_config(&mut self, id: PageId, config: PageConfig) {
+        self.page_configs.insert(id, config);
+    }
+
+    /// 获取页面配置（如果未设置则返回默认配置）
+    fn get_page_config(&self, id: PageId) -> PageConfig {
+        self.page_configs.get(&id).cloned().unwrap_or_default()
+    }
+
+    /// 处理页面离开（根据配置决定是否清理）
+    fn handle_page_leave(&mut self, page_id: PageId) -> Result<()> {
+        // 先获取配置和上下文
+        let config = self.get_page_config(page_id);
+        let should_cleanup = !config.cache_enabled;
+        let ctx = self.create_context();
+
+        if let Some(page) = self.cached_pages.get_mut(&page_id) {
+            page.on_leave(&ctx)?;
+            if should_cleanup {
+                page.on_cleanup(&ctx)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// 创建新页面实例
+    fn create_page(&self, id: PageId) -> Result<Box<dyn Page>> {
+        let builder = self
+            .builders
+            .get(&id)
+            .ok_or_else(|| anyhow::anyhow!("页面构建器未注册: {:?}", id))?;
+        builder.build()
+    }
+
     /// 直接设置当前页面（跳过构建器）
     ///
     /// 初始化并进入页面。
@@ -228,12 +284,21 @@ impl PageManager {
     ///
     /// 如果页面初始化或进入失败，返回错误
     pub fn set_current_page(&mut self, mut page: Box<dyn Page>) -> Result<()> {
-        // 初始化并进入页面
+        let page_id = page.id();
+
+        // 离开当前页面
+        if let Some(current_id) = self.current_page_id {
+            self.handle_page_leave(current_id)?;
+        }
+
+        // 初始化并进入新页面
         let ctx = self.create_context();
         page.on_init(&ctx)?;
         page.on_enter(&ctx)?;
 
-        self.current_page = Some(page);
+        // 存储到缓存中
+        self.cached_pages.insert(page_id, page);
+        self.current_page_id = Some(page_id);
         Ok(())
     }
 
@@ -243,29 +308,58 @@ impl PageManager {
     ///
     /// 如果页面构建器未注册，返回错误
     pub fn switch_to(&mut self, id: PageId) -> Result<()> {
+        // 先获取配置
+        let config = self.get_page_config(id);
+        let cache_enabled = config.cache_enabled;
+
         // 离开当前页面
-        {
-            let ctx = self.create_context();
-            if let Some(page) = self.current_page.as_mut() {
-                page.on_leave(&ctx)?;
-            }
+        if let Some(current_id) = self.current_page_id {
+            self.handle_page_leave(current_id)?;
         }
 
-        // 创建新页面
-        let builder = self
-            .builders
-            .get(&id)
-            .ok_or_else(|| anyhow::anyhow!("页面构建器未注册: {:?}", id))?;
-        let mut new_page = builder.build()?;
+        if cache_enabled {
+            // 缓存模式：尝试从缓存获取
+            if let Some(cached) = self.cached_pages.get_mut(&id) {
+                // 从缓存恢复，只触发 on_enter
+                // 注意：先获取锁，然后创建 context，避免借用冲突
+                let ctx = PageContext {
+                    visual_tx: self.visual_tx.clone(),
+                    audio_tx: self.audio_tx.clone(),
+                    window_size: self.window_size,
+                };
+                cached.on_enter(&ctx)?;
+                self.current_page_id = Some(id);
+                return Ok(());
+            }
 
-        // 初始化并进入新页面
-        {
+            // 缓存未命中，需要创建
+            let mut new_page = self.create_page(id)?;
             let ctx = self.create_context();
             new_page.on_init(&ctx)?;
             new_page.on_enter(&ctx)?;
+
+            self.cached_pages.insert(id, new_page);
+            self.current_page_id = Some(id);
+        } else {
+            // 不缓存模式：先清理旧实例（如果存在）
+            {
+                let ctx = self.create_context();
+                if let Some(mut old_page) = self.cached_pages.remove(&id) {
+                    let _ = old_page.on_cleanup(&ctx);
+                    // old_page 在这里被 drop
+                }
+            }
+
+            // 创建新页面
+            let mut new_page = self.create_page(id)?;
+            let ctx = self.create_context();
+            new_page.on_init(&ctx)?;
+            new_page.on_enter(&ctx)?;
+
+            self.cached_pages.insert(id, new_page);
+            self.current_page_id = Some(id);
         }
 
-        self.current_page = Some(new_page);
         Ok(())
     }
 
@@ -275,31 +369,21 @@ impl PageManager {
     ///
     /// 如果页面构建器未注册，返回错误
     pub fn push_page(&mut self, id: PageId) -> Result<()> {
+        // 获取当前页面 ID（如果有）
+        let current_id = self.current_page_id;
+
         // 暂停当前页面
-        {
+        if let Some(cid) = current_id {
             let ctx = self.create_context();
-            if let Some(page) = self.current_page.as_mut() {
+            if let Some(page) = self.cached_pages.get_mut(&cid) {
                 page.on_event(PageEvent::Pause, &ctx)?;
             }
+            // 将当前页面 ID 推入栈
+            self.page_stack.push(cid);
         }
 
-        // 将当前页面推入栈
-        if let Some(page) = self.current_page.take() {
-            self.page_stack.push(page);
-        }
-
-        // 创建并进入新页面
-        let builder = self
-            .builders
-            .get(&id)
-            .ok_or_else(|| anyhow::anyhow!("页面构建器未注册: {:?}", id))?;
-        let mut new_page = builder.build()?;
-
-        let ctx = self.create_context();
-        new_page.on_init(&ctx)?;
-        new_page.on_enter(&ctx)?;
-
-        self.current_page = Some(new_page);
+        // 切换到新页面（复用 switch_to 的逻辑）
+        self.switch_to(id)?;
         Ok(())
     }
 
@@ -310,21 +394,20 @@ impl PageManager {
     /// 如果没有父页面可以返回，返回错误
     pub fn pop_page(&mut self) -> Result<()> {
         // 离开当前页面
-        {
-            let ctx = self.create_context();
-            if let Some(mut page) = self.current_page.take() {
-                page.on_leave(&ctx)?;
-                page.on_cleanup(&ctx)?;
-                // 注意：page 在这里被 drop
-            }
+        if let Some(current_id) = self.current_page_id {
+            self.handle_page_leave(current_id)?;
         }
 
-        // 恢复上一个页面
-        if let Some(mut prev_page) = self.page_stack.pop() {
+        // 从栈中恢复上一个页面 ID
+        if let Some(prev_id) = self.page_stack.pop() {
+            self.current_page_id = Some(prev_id);
+
+            // 恢复上一个页面
             let ctx = self.create_context();
-            prev_page.on_event(PageEvent::Resume, &ctx)?;
-            prev_page.on_enter(&ctx)?;
-            self.current_page = Some(prev_page);
+            if let Some(page) = self.cached_pages.get_mut(&prev_id) {
+                page.on_event(PageEvent::Resume, &ctx)?;
+                page.on_enter(&ctx)?;
+            }
         }
 
         Ok(())
@@ -338,7 +421,9 @@ impl PageManager {
     pub fn handle_input(&mut self, msg: &crate::loops::InputMsg) -> Result<()> {
         let ctx = self.create_context();
 
-        if let Some(page) = self.current_page.as_mut() {
+        if let Some(page_id) = self.current_page_id
+            && let Some(page) = self.cached_pages.get_mut(&page_id)
+        {
             let _ = page.on_input(msg, &ctx)?;
         }
 
@@ -353,11 +438,13 @@ impl PageManager {
     pub fn handle_input_consumed(&mut self, msg: &crate::loops::InputMsg) -> Result<bool> {
         let ctx = self.create_context();
 
-        if let Some(page) = self.current_page.as_mut() {
-            Ok(page.on_input(msg, &ctx)?)
-        } else {
-            Ok(false)
+        if let Some(page_id) = self.current_page_id
+            && let Some(page) = self.cached_pages.get_mut(&page_id)
+        {
+            return page.on_input(msg, &ctx);
         }
+
+        Ok(false)
     }
 
     /// 更新当前页面
@@ -374,22 +461,26 @@ impl PageManager {
 
         let ctx = self.create_context();
 
-        if let Some(page) = self.current_page.as_mut() {
-            match page.on_update(dt, &ctx)? {
-                PageTransition::Stay => Ok(true),
-                PageTransition::Switch(id) => {
-                    self.switch_to(id)?;
-                    Ok(true)
+        if let Some(page_id) = self.current_page_id {
+            if let Some(page) = self.cached_pages.get_mut(&page_id) {
+                match page.on_update(dt, &ctx)? {
+                    PageTransition::Stay => Ok(true),
+                    PageTransition::Switch(id) => {
+                        self.switch_to(id)?;
+                        Ok(true)
+                    }
+                    PageTransition::Push(id) => {
+                        self.push_page(id)?;
+                        Ok(true)
+                    }
+                    PageTransition::Pop => {
+                        self.pop_page()?;
+                        Ok(true)
+                    }
+                    PageTransition::Exit => Ok(false),
                 }
-                PageTransition::Push(id) => {
-                    self.push_page(id)?;
-                    Ok(true)
-                }
-                PageTransition::Pop => {
-                    self.pop_page()?;
-                    Ok(true)
-                }
-                PageTransition::Exit => Ok(false),
+            } else {
+                Ok(true)
             }
         } else {
             Ok(true)
@@ -400,10 +491,14 @@ impl PageManager {
     pub fn render(&mut self) -> Vec<Instance> {
         let ctx = self.create_context();
 
-        self.current_page
-            .as_mut()
-            .map(|page| page.on_render(&ctx))
-            .unwrap_or_default()
+        if let Some(page_id) = self.current_page_id {
+            self.cached_pages
+                .get_mut(&page_id)
+                .map(|page| page.on_render(&ctx))
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        }
     }
 
     /// 处理窗口尺寸变化
@@ -416,7 +511,9 @@ impl PageManager {
         self.window_size = (width as f32, height as f32);
 
         let ctx = self.create_context();
-        if let Some(page) = self.current_page.as_mut() {
+        if let Some(page_id) = self.current_page_id
+            && let Some(page) = self.cached_pages.get_mut(&page_id)
+        {
             page.on_event(PageEvent::Resize { width, height }, &ctx)?;
         }
 
