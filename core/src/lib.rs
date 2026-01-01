@@ -4,9 +4,15 @@ pub mod chart;
 pub mod config;
 pub mod entry;
 pub mod filesystem;
+pub mod game_page;
 pub mod logging;
 pub mod loops;
 pub mod media;
+pub mod pages;
+pub mod title_page;
+
+// 导出常用类型
+pub use game_page::JudgeParams;
 
 use bms_rs::bms::prelude::Key;
 use bytemuck::{Pod, Zeroable};

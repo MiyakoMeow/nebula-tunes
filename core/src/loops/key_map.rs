@@ -48,6 +48,21 @@ impl KeyMap {
         match raw_msg {
             RawInputMsg::Key { code, state } => {
                 let RawKeyCode(key_str) = code;
+
+                // 优先检查系统按键
+                if state == KeyState::Pressed {
+                    match key_str.as_str() {
+                        "Enter" | "NumpadEnter" => {
+                            return Some(InputMsg::SystemKey(crate::loops::SystemKey::Enter));
+                        }
+                        "Escape" => {
+                            return Some(InputMsg::SystemKey(crate::loops::SystemKey::Escape));
+                        }
+                        _ => {}
+                    }
+                }
+
+                // 原有的轨道按键映射逻辑
                 let idx = self.map.get(&key_str).copied()?;
                 match state {
                     KeyState::Pressed => Some(InputMsg::KeyDown(idx)),

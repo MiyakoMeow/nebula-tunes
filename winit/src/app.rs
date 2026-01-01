@@ -105,7 +105,7 @@ impl ApplicationHandler for Handler {
 
         self.app = Some(App {
             window,
-            app: VisualApp::new(renderer, rx),
+            app: VisualApp::new(renderer, rx, self.control_tx.clone()),
         });
         let _ = self.control_tx.try_send(ControlMsg::Start);
     }
