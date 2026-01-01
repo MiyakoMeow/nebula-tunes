@@ -31,7 +31,7 @@ toml = { workspace = true }
 tracing = { workspace = true }
 clap = { workspace = true }
 tracing-subscriber = { workspace = true }
-rfd = "0.15"
+rfd = "0.16"
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 wgpu = { workspace = true, features = ["vulkan"] }
