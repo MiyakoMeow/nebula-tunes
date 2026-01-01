@@ -31,19 +31,6 @@ codegen-units = 1
 # Slows compile times, marginal improvements.
 lto = "thin"
 
-
-
-[workspace.lints.rust]
-missing_docs = "warn"
-unused_crate_dependencies = "allow"
-unused_extern_crates = "warn"
-
-[workspace.lints.rustdoc]
-broken_intra_doc_links = "deny"
-private_doc_tests = "warn"
-invalid_html_tags = "warn"
-bare_urls = "warn"
-
 [workspace.dependencies]
 anyhow = "1"
 async-fs = "2"
@@ -72,8 +59,18 @@ wgpu = { version = "28", default-features = false, features = ["wgsl", "serde"] 
 # Desktop-only dependencies
 clap = { version = "4", features = ["derive"] }
 
-[workspace.lints.clippy]
+[workspace.lints.rust]
+missing_docs = "warn"
+unused_crate_dependencies = "allow"
+unused_extern_crates = "warn"
 
+[workspace.lints.rustdoc]
+broken_intra_doc_links = "deny"
+private_doc_tests = "warn"
+invalid_html_tags = "warn"
+bare_urls = "warn"
+
+[workspace.lints.clippy]
 # Restriction
 as_conversions = "allow"
 cognitive_complexity = "allow"
