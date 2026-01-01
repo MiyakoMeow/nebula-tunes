@@ -150,11 +150,8 @@ pub fn run(
                         }
                     }
                 }
-                ControlMsg::FileSelected(None) => {
-                    // 用户取消选择，保持在 Title 页面
-                }
-                ControlMsg::Start => {
-                    // 启动消息，已在循环开始前处理
+                ControlMsg::FileSelected(None) | ControlMsg::Start => {
+                    // 用户取消选择或启动消息，保持在 Title 页面
                 }
             }
         }

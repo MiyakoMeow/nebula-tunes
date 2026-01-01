@@ -11,6 +11,12 @@ pub struct TitlePage {
     instance_buffer: Vec<Instance>,
 }
 
+impl Default for TitlePage {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TitlePage {
     /// 创建新的标题页面
     #[must_use]
@@ -56,6 +62,7 @@ impl TitlePage {
     }
 
     /// 使用矩形渲染像素风格文字
+    #[allow(clippy::cast_precision_loss)]
     fn render_pixel_text(&mut self, center_x: f32, y: f32, text: &str, size: f32, color: [f32; 4]) {
         // 简化实现：每个字符用一个矩形表示
         let char_width = size * 0.5;
@@ -115,6 +122,12 @@ impl Page for TitlePage {
 
 /// 标题页面构建器
 pub struct TitlePageBuilder;
+
+impl Default for TitlePageBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl TitlePageBuilder {
     /// 创建新的构建器
