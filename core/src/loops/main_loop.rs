@@ -19,8 +19,9 @@ use tracing::debug;
 use crate::chart::bms::BgaFileType;
 use crate::game_page::{GamePageBuilder, JudgeParams};
 use crate::loops::audio::Msg;
-use crate::loops::{ControlMsg, RawInputMsg, VisualMsg};
+use crate::loops::{ControlMsg, InputMsg, RawInputMsg, SystemKey, VisualMsg};
 use crate::media::BgaDecodeCache;
+use crate::pages::Page;
 use crate::pages::PageManager;
 
 /// 运行主循环
@@ -55,6 +56,10 @@ pub fn run(
     // 等待启动信号
     match control_rx.recv() {
         Ok(ControlMsg::Start) => {}
+        Ok(ControlMsg::FileSelected(_)) => {
+            // 不应该在启动前收到文件选择消息
+            return;
+        }
         Err(_) => return,
     }
 
@@ -62,16 +67,26 @@ pub fn run(
     let key_map = crate::loops::key_map::KeyMap::new(key_codes);
 
     // 创建 PageManager
-    let mut page_manager = PageManager::new(visual_tx.clone(), audio_tx);
+    let mut page_manager = PageManager::new(visual_tx.clone(), audio_tx.clone());
 
     // 如果有 processor，直接创建游戏页面并设置
     if let Some(proc) = processor {
-        let game_page =
-            GamePageBuilder::new(proc, audio_paths, bmp_paths, bmp_types, bga_cache, judge)
-                .build_once();
+        let game_page = GamePageBuilder::new(
+            proc,
+            audio_paths,
+            bmp_paths,
+            bmp_types,
+            bga_cache.clone(),
+            judge.clone(),
+        )
+        .build_once();
 
         // 直接设置当前页面
         let _ = page_manager.set_current_page(game_page);
+    } else {
+        // 没有 processor，创建 Title 页面
+        let title_page = crate::title_page::TitlePageBuilder::new().build_once();
+        let _ = page_manager.set_current_page(title_page);
     }
 
     // 等待页面初始化完成（包括预加载）
@@ -100,7 +115,39 @@ pub fn run(
         // 处理原始输入
         while let Ok(raw_msg) = raw_input_rx.try_recv() {
             if let Some(input_msg) = key_map.convert(raw_msg) {
-                let _ = page_manager.handle_input(&input_msg);
+                let consumed = page_manager
+                    .handle_input_consumed(&input_msg)
+                    .unwrap_or(false);
+
+                // 检查是否是 ESC 键且未被消费
+                if !consumed && let InputMsg::SystemKey(SystemKey::Escape) = input_msg {
+                    // 退出主循环
+                    return;
+                }
+            }
+        }
+
+        // 处理控制消息（文件选择结果）
+        while let Ok(ctrl_msg) = control_rx.try_recv() {
+            match ctrl_msg {
+                ControlMsg::FileSelected(Some(bms_path)) => {
+                    // 加载 BMS 并切换到游戏页面
+                    match load_bms_in_main_loop(bms_path, &judge, &bga_cache, &visual_tx, &audio_tx)
+                    {
+                        Ok(game_page) => {
+                            let _ = page_manager.set_current_page(game_page);
+                        }
+                        Err(e) => {
+                            debug!(error = %e, "加载 BMS 失败");
+                        }
+                    }
+                }
+                ControlMsg::FileSelected(None) => {
+                    // 用户取消选择，保持在 Title 页面
+                }
+                ControlMsg::Start => {
+                    // 启动消息，已在循环开始前处理
+                }
             }
         }
 
@@ -133,4 +180,33 @@ pub fn run(
             last_log_sec = sec;
         }
     }
+}
+
+/// 在主循环中加载 BMS 并创建游戏页面
+fn load_bms_in_main_loop(
+    bms_path: PathBuf,
+    judge: &JudgeParams,
+    bga_cache: &Arc<BgaDecodeCache>,
+    _visual_tx: &mpsc::SyncSender<VisualMsg>,
+    _audio_tx: &mpsc::SyncSender<Msg>,
+) -> anyhow::Result<Box<dyn Page>> {
+    use futures_lite::future;
+
+    // 使用 block_on 将异步加载转为同步
+    let (processor, audio_paths, bmp_paths, bmp_types) = future::block_on(
+        crate::chart::bms::load_bms_and_collect_paths(bms_path, judge.travel),
+    )?;
+
+    // 创建游戏页面
+    let game_page = GamePageBuilder::new(
+        processor,
+        audio_paths,
+        bmp_paths,
+        bmp_types,
+        bga_cache.clone(),
+        judge.clone(),
+    )
+    .build_once();
+
+    Ok(game_page)
 }

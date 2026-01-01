@@ -13,10 +13,12 @@ pub mod visual;
 
 use std::path::PathBuf;
 
-/// 控制主循环启动的消息
+/// 控制主循环的消息
 pub enum ControlMsg {
     /// 触发主循环开始
     Start,
+    /// 文件选择结果（BMS 文件路径）
+    FileSelected(Option<PathBuf>),
 }
 
 /// 原始按键代码（平台无关表示）
@@ -113,6 +115,15 @@ pub enum GamepadEvent {
     ConnectionChanged(bool),
 }
 
+/// 系统按键类型
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SystemKey {
+    /// Enter 键
+    Enter,
+    /// Escape 键
+    Escape,
+}
+
 /// 输入事件消息
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputMsg {
@@ -120,6 +131,8 @@ pub enum InputMsg {
     KeyDown(usize),
     /// 某轨道按键抬起（索引）
     KeyUp(usize),
+    /// 系统按键（Enter、Escape 等）
+    SystemKey(SystemKey),
 }
 
 /// BGA 图层类型
@@ -148,6 +161,8 @@ pub enum VisualMsg {
     },
     /// 触发显示 POOR 图层
     BgaPoorTrigger,
+    /// 请求打开文件选择器（从主循环发送到 winit 线程）
+    RequestFileOpen,
     /// 播放视频 BGA
     VideoPlay {
         /// 目标图层

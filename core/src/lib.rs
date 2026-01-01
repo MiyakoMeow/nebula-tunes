@@ -9,6 +9,7 @@ pub mod logging;
 pub mod loops;
 pub mod media;
 pub mod pages;
+pub mod title_page;
 
 // 导出常用类型
 pub use game_page::JudgeParams;

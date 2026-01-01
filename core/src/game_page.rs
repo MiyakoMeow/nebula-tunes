@@ -117,6 +117,10 @@ impl Page for GamePage {
         };
 
         match msg {
+            InputMsg::SystemKey(_) => {
+                // 系统按键由页面管理器处理
+                Ok(false)
+            }
             InputMsg::KeyDown(idx) => {
                 if let Some(flag) = self.state.pressed.get_mut(*idx) {
                     *flag = true;

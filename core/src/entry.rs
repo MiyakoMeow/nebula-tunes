@@ -11,16 +11,23 @@ pub struct VisualApp {
     window_renderer: visual::Renderer,
     /// 视觉消息接收端
     visual_rx: mpsc::Receiver<VisualMsg>,
+    /// 控制消息发送端（用于发送文件选择结果）
+    control_tx: mpsc::SyncSender<crate::loops::ControlMsg>,
     /// 最新一帧的实例列表
     latest_instances: Vec<Instance>,
 }
 
 impl VisualApp {
     /// 创建视觉应用
-    pub fn new(window_renderer: visual::Renderer, visual_rx: mpsc::Receiver<VisualMsg>) -> Self {
+    pub fn new(
+        window_renderer: visual::Renderer,
+        visual_rx: mpsc::Receiver<VisualMsg>,
+        control_tx: mpsc::SyncSender<crate::loops::ControlMsg>,
+    ) -> Self {
         Self {
             window_renderer,
             visual_rx,
+            control_tx,
             latest_instances: visual::base_instances(),
         }
     }
@@ -42,6 +49,18 @@ impl VisualApp {
                 }
                 VisualMsg::BgaPoorTrigger => {
                     self.window_renderer.trigger_poor();
+                }
+                VisualMsg::RequestFileOpen => {
+                    // 必须在主线程（winit 事件循环线程）调用 rfd
+                    let file_path = rfd::FileDialog::new()
+                        .add_filter("BMS", &["bms", "bme", "bml", "bmse"])
+                        .add_filter("All Files", &["*"])
+                        .pick_file();
+
+                    // 发送结果回主循环
+                    let _ = self
+                        .control_tx
+                        .send(crate::loops::ControlMsg::FileSelected(file_path));
                 }
                 // 视频消息处理
                 VisualMsg::VideoPlay {

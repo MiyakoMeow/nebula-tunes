@@ -345,6 +345,21 @@ impl PageManager {
         Ok(())
     }
 
+    /// 处理输入事件并返回是否被消费
+    ///
+    /// # Errors
+    ///
+    /// 如果页面处理输入失败，返回错误
+    pub fn handle_input_consumed(&mut self, msg: &crate::loops::InputMsg) -> Result<bool> {
+        let ctx = self.create_context();
+
+        if let Some(page) = self.current_page.as_mut() {
+            Ok(page.on_input(msg, &ctx)?)
+        } else {
+            Ok(false)
+        }
+    }
+
     /// 更新当前页面
     ///
     /// 返回是否应该继续运行
