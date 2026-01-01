@@ -17,12 +17,11 @@ use bms_rs::chart_process::prelude::*;
 use tracing::debug;
 
 use crate::chart::bms::BgaFileType;
-use crate::game_page::JudgeParams;
-use crate::game_page_builder::GamePageBuilder;
-use crate::loops::audio::{Event, Msg};
-use crate::loops::visual::{BgaDecodeCache, preload_bga_files};
+use crate::game_page::{GamePageBuilder, JudgeParams};
+use crate::loops::audio::Msg;
 use crate::loops::{ControlMsg, RawInputMsg, VisualMsg};
-use crate::pages_manager::PageManager;
+use crate::media::BgaDecodeCache;
+use crate::pages::PageManager;
 
 /// 运行主循环
 ///
@@ -39,7 +38,6 @@ use crate::pages_manager::PageManager;
 /// * `key_codes` - 按键代码字符串列表
 /// * `judge` - 判定参数
 /// * `audio_tx` - 音频播放请求发送端
-/// * `audio_event_rx` - 音频事件接收端
 #[allow(clippy::too_many_arguments)]
 pub fn run(
     processor: Option<BmsProcessor>,
@@ -53,7 +51,6 @@ pub fn run(
     key_codes: Vec<String>,
     judge: JudgeParams,
     audio_tx: mpsc::SyncSender<Msg>,
-    audio_event_rx: mpsc::Receiver<Event>,
 ) {
     // 等待启动信号
     match control_rx.recv() {
@@ -63,22 +60,6 @@ pub fn run(
 
     // 创建按键映射器
     let key_map = crate::loops::key_map::KeyMap::new(key_codes);
-
-    // 预加载音频文件
-    let files: Vec<PathBuf> = audio_paths.values().cloned().collect();
-    let _ = audio_tx.send(Msg::PreloadAll { files });
-
-    // 预加载 BGA 文件
-    let bmp_files: Vec<PathBuf> = bmp_paths.values().cloned().collect();
-    let bga_cache_for_thread = bga_cache.clone();
-    let bga_preload = thread::spawn(move || preload_bga_files(bga_cache_for_thread, bmp_files));
-
-    // 等待音频预加载完成
-    match audio_event_rx.recv() {
-        Ok(Event::PreloadFinished) => {}
-        Err(_) => return,
-    }
-    let _ = bga_preload.join();
 
     // 创建 PageManager
     let mut page_manager = PageManager::new(visual_tx.clone(), audio_tx);
@@ -92,6 +73,9 @@ pub fn run(
         // 直接设置当前页面
         let _ = page_manager.set_current_page(game_page);
     }
+
+    // 等待页面初始化完成（包括预加载）
+    // 注意：预加载现在在 GamePage::on_init() 中执行
 
     // 主循环
     let tick = Duration::from_millis(16);

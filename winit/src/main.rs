@@ -45,7 +45,7 @@ fn main() -> Result<()> {
     let (visual_tx, visual_rx) = mpsc::sync_channel::<VisualMsg>(2);
     let (raw_input_tx, raw_input_rx) = mpsc::sync_channel::<RawInputMsg>(64);
     let (audio_tx, audio_rx) = mpsc::sync_channel::<audio::Msg>(64);
-    let (audio_event_tx, audio_event_rx) = mpsc::sync_channel::<audio::Event>(1);
+    let (audio_event_tx, _audio_event_rx) = mpsc::sync_channel::<audio::Event>(1);
     let bga_cache = Arc::new(visual::BgaDecodeCache::new());
 
     let _audio_thread = thread::spawn(move || {
@@ -70,7 +70,6 @@ fn main() -> Result<()> {
                 windows: sys.judge.windows(),
             },
             audio_tx,
-            audio_event_rx,
         );
     });
 

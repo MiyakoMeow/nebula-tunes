@@ -15,7 +15,7 @@ use crate::loops::audio::Msg;
 use crate::loops::visual::{build_instances_for_processor_with_state, preload_bga_files};
 use crate::loops::{InputMsg, VisualMsg};
 use crate::media::BgaDecodeCache;
-use crate::pages::{Page, PageContext, PageId, PageTransition};
+use crate::pages::{Page, PageBuilder, PageContext, PageId, PageTransition};
 
 /// 游戏页面：实际的 BMS 游戏界面
 pub struct GamePage {
@@ -181,39 +181,32 @@ impl Page for GamePage {
                 };
 
                 // 根据判定更新状态
-                match judge_level {
-                    4 | 3 => {
-                        self.state.combo = self.state.combo.saturating_add(1);
-                        self.state.gauge = (self.state.gauge + 0.02).min(1.0);
-                        if let ChartEvent::Note { wav_id, .. } = ev.event()
-                            && let Some(wav_id) = wav_id.as_ref()
-                            && let Some(path) = self.audio_paths.get(wav_id)
-                            && ctx.audio_tx.try_send(Msg::Play(path.clone())).is_ok()
-                        {
-                            // 音频播放成功
-                        }
+                let (gauge_delta, combo_delta) = match judge_level {
+                    4 | 3 => (0.02, 1),
+                    2 => (0.01, 1),
+                    1 => (-0.03, 0),
+                    _ => (-0.05, 0),
+                };
+
+                // 更新连击和血条
+                if combo_delta == 0 {
+                    self.state.combo = 0;
+                } else {
+                    self.state.combo = self.state.combo.saturating_add(1);
+                }
+                self.state.gauge = (self.state.gauge + gauge_delta).clamp(0.0, 1.0);
+
+                // 播放音符音频（仅当判定成功时）
+                if judge_level >= 2 {
+                    if let ChartEvent::Note { wav_id, .. } = ev.event()
+                        && let Some(wav_id) = wav_id.as_ref()
+                        && let Some(path) = self.audio_paths.get(wav_id)
+                    {
+                        let _ = ctx.audio_tx.try_send(Msg::Play(path.clone()));
                     }
-                    2 => {
-                        self.state.combo = self.state.combo.saturating_add(1);
-                        self.state.gauge = (self.state.gauge + 0.01).min(1.0);
-                        if let ChartEvent::Note { wav_id, .. } = ev.event()
-                            && let Some(wav_id) = wav_id.as_ref()
-                            && let Some(path) = self.audio_paths.get(wav_id)
-                            && ctx.audio_tx.try_send(Msg::Play(path.clone())).is_ok()
-                        {
-                            // 音频播放成功
-                        }
-                    }
-                    1 => {
-                        self.state.combo = 0;
-                        self.state.gauge = (self.state.gauge - 0.03).max(0.0);
-                        let _ = ctx.visual_tx.try_send(VisualMsg::BgaPoorTrigger);
-                    }
-                    _ => {
-                        self.state.combo = 0;
-                        self.state.gauge = (self.state.gauge - 0.05).max(0.0);
-                        let _ = ctx.visual_tx.try_send(VisualMsg::BgaPoorTrigger);
-                    }
+                } else {
+                    // 判定失败，触发 POOR 动画
+                    let _ = ctx.visual_tx.try_send(VisualMsg::BgaPoorTrigger);
                 }
 
                 Ok(true)
@@ -313,5 +306,87 @@ impl Page for GamePage {
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
+    }
+}
+
+/// 游戏页面构建器，用于创建 `GamePage` 实例
+pub struct GamePageBuilder {
+    /// BMS 处理器
+    processor: BmsProcessor,
+    /// 音频路径映射
+    audio_paths: HashMap<WavId, PathBuf>,
+    /// BGA 图片路径映射
+    bmp_paths: HashMap<BmpId, PathBuf>,
+    /// BGA 文件类型映射
+    bmp_types: HashMap<BmpId, BgaFileType>,
+    /// BGA 解码缓存
+    bga_cache: Arc<BgaDecodeCache>,
+    /// 判定参数
+    judge: JudgeParams,
+}
+
+impl GamePageBuilder {
+    /// 创建新的游戏页面构建器
+    ///
+    /// # 参数
+    ///
+    /// * `processor`: BMS 谱面处理器
+    /// * `audio_paths`: 音频 ID 到路径的映射
+    /// * `bmp_paths`: BGA 图片 ID 到路径的映射
+    /// * `bmp_types`: BGA 图片 ID 到文件类型的映射
+    /// * `bga_cache`: BGA 解码缓存
+    /// * `judge`: 判定参数
+    #[must_use]
+    pub const fn new(
+        processor: BmsProcessor,
+        audio_paths: HashMap<WavId, PathBuf>,
+        bmp_paths: HashMap<BmpId, PathBuf>,
+        bmp_types: HashMap<BmpId, BgaFileType>,
+        bga_cache: Arc<BgaDecodeCache>,
+        judge: JudgeParams,
+    ) -> Self {
+        Self {
+            processor,
+            audio_paths,
+            bmp_paths,
+            bmp_types,
+            bga_cache,
+            judge,
+        }
+    }
+
+    /// 构建游戏页面实例（消耗 self）
+    ///
+    /// # Errors
+    ///
+    /// 永不返回错误
+    #[must_use]
+    pub fn build_once(self) -> Box<dyn Page> {
+        Box::new(GamePage::new(
+            self.processor,
+            self.audio_paths,
+            self.bmp_paths,
+            self.bmp_types,
+            self.bga_cache,
+            self.judge,
+        ))
+    }
+}
+
+impl PageBuilder for GamePageBuilder {
+    /// 构建游戏页面实例
+    ///
+    /// # Errors
+    ///
+    /// 总是返回错误，因为 `BmsProcessor` 不实现 `Clone`。请使用 `GamePageBuilder::build_once` 代替。
+    fn build(&self) -> Result<Box<dyn Page>> {
+        Err(anyhow::anyhow!(
+            "GamePageBuilder::build() cannot be called. Use GamePageBuilder::build_once() instead because BmsProcessor doesn't implement Clone."
+        ))
+    }
+
+    /// 获取页面 ID
+    fn page_id(&self) -> PageId {
+        PageId::Game
     }
 }
