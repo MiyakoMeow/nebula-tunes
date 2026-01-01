@@ -55,6 +55,23 @@ impl PageManager {
         Ok(())
     }
 
+    /// 直接设置当前页面（跳过构建器）
+    ///
+    /// 初始化并进入页面。
+    ///
+    /// # Errors
+    ///
+    /// 如果页面初始化或进入失败，返回错误
+    pub fn set_current_page(&mut self, mut page: Box<dyn Page>) -> Result<()> {
+        // 初始化并进入页面
+        let ctx = self.create_context();
+        page.on_init(&ctx)?;
+        page.on_enter(&ctx)?;
+
+        self.current_page = Some(page);
+        Ok(())
+    }
+
     /// 切换到指定页面
     ///
     /// # Errors

@@ -12,6 +12,7 @@ use clap::Parser;
 use futures_lite::future;
 
 use nebula_tunes::{
+    JudgeParams,
     chart::bms::load_bms_and_collect_paths,
     config::load_sys,
     logging,
@@ -64,7 +65,7 @@ fn main() -> Result<()> {
             visual_tx,
             raw_input_rx,
             key_strings,
-            main_loop::JudgeParams {
+            JudgeParams {
                 travel: sys.judge.visible_travel,
                 windows: sys.judge.windows(),
             },
