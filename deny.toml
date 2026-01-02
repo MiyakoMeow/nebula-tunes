@@ -92,6 +92,7 @@ ignore = [
 allow = [
   "AGPL-3.0-or-later",
   "MIT",
+  "MIT-0",
   "Apache-2.0",
   "Apache-2.0 WITH LLVM-exception",
   "BSD-3-Clause",
