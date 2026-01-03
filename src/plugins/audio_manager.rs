@@ -7,6 +7,7 @@ use bevy_kira_audio::{AudioApp, AudioChannel, AudioControl};
 
 use crate::plugins::bms_processor::{AudioSystemSet, BmsProcessorResource};
 use crate::resources::NowStamp;
+use crate::schedule::AudioSchedule;
 
 // 导入trait以访问BmsProcessor的方法
 use bms_rs::chart_process::ChartProcessor;
@@ -30,12 +31,12 @@ impl Plugin for AudioManagerPlugin {
             .add_audio_channel::<crate::plugins::bms_processor::SfxChannel>()
             .add_message::<AudioPlayMessage>()
             .add_systems(
-                Update,
+                AudioSchedule,
                 (start_when_audio_ready, handle_audio_messages)
                     .chain()
                     .in_set(AudioSystemSet::AudioPlay),
             )
-            .add_systems(Update, print_playback_status);
+            .add_systems(AudioSchedule, print_playback_status);
     }
 }
 

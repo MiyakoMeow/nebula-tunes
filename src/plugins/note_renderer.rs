@@ -11,6 +11,7 @@ use num_traits::ToPrimitive;
 use crate::components::{NoteMarker, NoteState, PooledNote};
 use crate::plugins::bms_processor::BmsProcessorResource;
 use crate::resources::NowStamp;
+use crate::schedule::RenderSchedule;
 
 /// 轨道数量
 const LANE_COUNT: usize = 8;
@@ -51,8 +52,8 @@ impl Plugin for NoteRendererPlugin {
         app.init_resource::<NotePoolState>()
             .init_resource::<ChartVisualState>()
             .add_systems(Startup, (setup_note_scene, initialize_note_pool))
-            .add_systems(Update, render_visible_chart)
-            .add_systems(Update, print_pool_stats);
+            .add_systems(RenderSchedule, render_visible_chart)
+            .add_systems(RenderSchedule, print_pool_stats);
     }
 }
 
