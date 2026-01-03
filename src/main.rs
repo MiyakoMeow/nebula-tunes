@@ -30,7 +30,7 @@ use plugins::{
     TimeSystemPlugin,
 };
 use resources::ExecArgs;
-use schedule::{AudioSchedule, LogicSchedule, RenderSchedule};
+use schedule::{AudioSchedule, LogicSchedule};
 
 fn main() {
     let args = ExecArgs::parse();
@@ -66,14 +66,10 @@ fn configure_schedules(app: &mut App) {
     audio_schedule.set_executor_kind(ExecutorKind::SingleThreaded);
     app.add_schedule(audio_schedule);
 
-    let mut render_schedule = Schedule::new(RenderSchedule);
-    render_schedule.set_executor_kind(ExecutorKind::SingleThreaded);
-    app.add_schedule(render_schedule);
-
     // 配置执行顺序
     let mut main_order = app.world_mut().resource_mut::<MainScheduleOrder>();
     main_order.insert_after(bevy::app::First, LogicSchedule);
     main_order.insert_after(LogicSchedule, AudioSchedule);
     main_order.insert_after(AudioSchedule, bevy::app::Update);
-    main_order.insert_after(bevy::app::Update, RenderSchedule);
+    // 渲染在 Update 中运行，会自动跟随在 Update 之后
 }
