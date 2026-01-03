@@ -113,12 +113,12 @@ async fn load_bms_and_collect_paths(
 
     // 解析BMS文件
     let BmsOutput { bms, warnings: _ } = bms_rs::bms::parse_bms(&bms_str, default_config());
-    let bms = bms.unwrap();
+    let bms = bms?;
 
     // 生成基础BPM
     let base_bpm = StartBpmGenerator
         .generate(&bms)
-        .unwrap_or(BaseBpm(120.0.into()));
+        .unwrap_or_else(|| BaseBpm(120.0.into()));
 
     // 创建处理器
     let processor = BmsProcessor::new::<KeyLayoutBeat>(
@@ -130,7 +130,10 @@ async fn load_bms_and_collect_paths(
     );
 
     // 收集音频文件路径
-    let bms_dir = bms_path.parent().unwrap_or(Path::new(".")).to_path_buf();
+    let bms_dir = bms_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf();
     let mut audio_paths: HashMap<WavId, PathBuf> = HashMap::new();
 
     let child_list: Vec<PathBuf> = processor
