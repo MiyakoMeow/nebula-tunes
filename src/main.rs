@@ -28,6 +28,7 @@ use bms_rs::{bms::prelude::*, chart_process::prelude::*};
 use chardetng::EncodingDetector;
 use clap::Parser;
 use gametime::{TimeSpan, TimeStamp};
+use num_traits::ToPrimitive;
 
 fn main() {
     let args = ExecArgs::parse();
@@ -309,7 +310,7 @@ fn render_visible_chart(
     status: Option<ResMut<BmsProcessStatus>>,
     mut vis: ResMut<ChartVisualState>,
     mut q_notes: Query<(&mut Transform, &mut Visibility), With<NoteMarker>>,
-    now_stamp: Res<NowStamp>,
+    _now_stamp: Res<NowStamp>,
 ) {
     let Some(mut status) = status else {
         return;
@@ -318,8 +319,9 @@ fn render_visible_chart(
         return;
     }
     let mut alive: Vec<ChartEventId> = Vec::new();
-    for ev in status.processor.visible_events(now_stamp.0) {
-        let ChartEvent::Note { side, key, .. } = ev.event() else {
+    for ev in status.processor.visible_events() {
+        let (playhead_event, range) = ev;
+        let ChartEvent::Note { side, key, .. } = playhead_event.event() else {
             continue;
         };
         if *side != PlayerSide::Player1 {
@@ -329,8 +331,10 @@ fn render_visible_chart(
             continue;
         };
         let x = lane_x(idx);
-        let y = -VISIBLE_HEIGHT / 2.0 + ev.display_ratio().as_f64() as f32 * VISIBLE_HEIGHT;
-        if let Some(entity) = vis.notes.get(&ev.id()) {
+        let ratio_value = range.start().as_ref();
+        let y = -VISIBLE_HEIGHT / 2.0
+            + ToPrimitive::to_f64(ratio_value).unwrap_or(0.0) as f32 * VISIBLE_HEIGHT;
+        if let Some(entity) = vis.notes.get(&playhead_event.id()) {
             if let Ok((mut tf, mut v)) = q_notes.get_mut(*entity) {
                 tf.translation.x = x;
                 tf.translation.y = y;
@@ -351,9 +355,9 @@ fn render_visible_chart(
                     NoteMarker,
                 ))
                 .id();
-            vis.notes.insert(ev.id(), entity);
+            vis.notes.insert(playhead_event.id(), entity);
         }
-        alive.push(ev.id());
+        alive.push(playhead_event.id());
     }
     let obsolete: Vec<ChartEventId> = vis
         .notes
