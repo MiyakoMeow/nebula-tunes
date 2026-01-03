@@ -12,6 +12,7 @@ futures-lite = "2"
 async-fs = "2"
 clap = { version = "4", features = ["derive"] }
 gametime = { version = "0.7.2", features = ["global_reference"] }
+num-traits = "0.2.19"
 
 [dependencies.bevy]
 version = "0.17"
