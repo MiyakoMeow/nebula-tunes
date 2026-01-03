@@ -16,6 +16,12 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@v6
+      - if: matrix.os == 'ubuntu-latest'
+        name: Cache APT packages
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: libasound2-dev pkg-config libavutil-dev libavcodec-dev libavformat-dev libavdevice-dev libavfilter-dev libswscale-dev libswresample-dev libpostproc-dev ffmpeg waylandpp-dev
+          version: 1.0
       - name: Setup rustfmt and clippy
         uses: dtolnay/rust-toolchain@v1
         with:
