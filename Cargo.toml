@@ -37,6 +37,11 @@ features = [
 [dependencies.bms-rs]
 git = "https://github.com/MikuroXina/bms-rs"
 
+# Platform-specific winit configuration
+[target.'cfg(target_os = "linux")'.dependencies.winit]
+version = "0.30"
+features = ["x11", "wayland"]
+
 # Enable a small amount of optimization in the dev profile.
 [profile.dev]
 opt-level = 1
