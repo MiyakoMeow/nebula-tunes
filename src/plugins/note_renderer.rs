@@ -30,7 +30,7 @@ const POOL_INITIAL_SIZE: usize = 500;
 pub struct NotePoolState {
     /// 可用的实体池
     available: Vec<Entity>,
-    /// 活跃音符: ChartEventId -> Entity
+    /// 活跃音符: `ChartEventId` -> Entity
     active: HashMap<ChartEventId, Entity>,
     /// 实体到事件ID的反向映射
     entity_to_event: HashMap<Entity, ChartEventId>,
@@ -68,7 +68,7 @@ fn lane_x(idx: usize) -> f32 {
 }
 
 /// 将Key转换为轨道索引
-fn key_to_lane(key: Key) -> Option<usize> {
+const fn key_to_lane(key: Key) -> Option<usize> {
     match key {
         Key::Scratch(_) => Some(0),
         Key::Key(n) => match n {
