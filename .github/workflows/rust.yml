@@ -20,7 +20,7 @@ jobs:
         name: Cache APT packages
         uses: awalsh128/cache-apt-pkgs-action@v1
         with:
-          packages: libwayland-dev libx11-dev libxkbcommon-dev
+          packages: libasound2-dev libudev-dev libx11-dev libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev pkg-config
           version: 1.0
       - name: Setup rustfmt and clippy
         uses: dtolnay/rust-toolchain@v1
