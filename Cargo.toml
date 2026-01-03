@@ -2,6 +2,7 @@
 name = "nebula-tunes"
 version = "0.1.0"
 edition = "2024"
+license = "AGPL-3.0-or-later"
 
 [dependencies]
 anyhow = "1"
@@ -35,6 +36,11 @@ features = [
 
 [dependencies.bms-rs]
 git = "https://github.com/MikuroXina/bms-rs"
+
+# Platform-specific winit configuration
+[target.'cfg(target_os = "linux")'.dependencies.winit]
+version = "0.30"
+features = ["x11", "wayland"]
 
 # Enable a small amount of optimization in the dev profile.
 [profile.dev]
