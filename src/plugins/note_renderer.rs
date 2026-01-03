@@ -8,7 +8,7 @@ use bevy::prelude::*;
 use bms_rs::{bms::prelude::*, chart_process::prelude::*};
 use num_traits::ToPrimitive;
 
-use crate::components::NoteMarker;
+use crate::components::{NoteMarker, NoteState, PooledNote};
 use crate::plugins::bms_processor::BmsProcessorResource;
 use crate::resources::NowStamp;
 
@@ -22,11 +22,24 @@ const LANE_GAP: f32 = 8.0;
 const VISIBLE_HEIGHT: f32 = 600.0;
 /// 音符高度
 const NOTE_HEIGHT: f32 = 12.0;
+/// 对象池初始大小
+const POOL_INITIAL_SIZE: usize = 500;
+
+/// 音符池状态
+#[derive(Resource, Default)]
+pub struct NotePoolState {
+    /// 可用的实体池
+    available: Vec<Entity>,
+    /// 活跃音符: ChartEventId -> Entity
+    active: HashMap<ChartEventId, Entity>,
+    /// 实体到事件ID的反向映射
+    entity_to_event: HashMap<Entity, ChartEventId>,
+}
 
 /// 图谱视觉状态
 #[derive(Resource, Default)]
 pub struct ChartVisualState {
-    /// 音符事件ID到实体的映射
+    /// 音符事件ID到实体的映射（保留用于兼容）
     pub notes: HashMap<ChartEventId, Entity>,
 }
 
@@ -35,9 +48,11 @@ pub struct NoteRendererPlugin;
 
 impl Plugin for NoteRendererPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<ChartVisualState>()
-            .add_systems(Startup, setup_note_scene)
-            .add_systems(Update, render_visible_chart);
+        app.init_resource::<NotePoolState>()
+            .init_resource::<ChartVisualState>()
+            .add_systems(Startup, (setup_note_scene, initialize_note_pool))
+            .add_systems(Update, render_visible_chart)
+            .add_systems(Update, print_pool_stats);
     }
 }
 
@@ -98,12 +113,39 @@ fn setup_note_scene(mut commands: Commands) {
     ));
 }
 
-/// 渲染可见音符
+/// 初始化音符对象池
+fn initialize_note_pool(mut commands: Commands, mut pool: ResMut<NotePoolState>) {
+    println!("✓ 初始化音符对象池: {} 个实体", POOL_INITIAL_SIZE);
+
+    for _ in 0..POOL_INITIAL_SIZE {
+        let entity = commands
+            .spawn((
+                Sprite {
+                    color: Color::srgb(0.3, 0.7, 1.0),
+                    custom_size: Some(Vec2::new(LANE_WIDTH - 4.0, NOTE_HEIGHT)),
+                    ..Default::default()
+                },
+                Transform::from_xyz(0.0, 0.0, 2.0),
+                GlobalTransform::default(),
+                Visibility::Hidden,
+                InheritedVisibility::default(),
+                NoteMarker,
+                PooledNote {
+                    state: NoteState::Hidden,
+                    event_id: None,
+                },
+            ))
+            .id();
+        pool.available.push(entity);
+    }
+}
+
+/// 渲染可见音符（使用对象池）
 fn render_visible_chart(
-    mut commands: Commands,
     status: Option<ResMut<BmsProcessorResource>>,
+    mut pool: ResMut<NotePoolState>,
     mut vis: ResMut<ChartVisualState>,
-    mut q_notes: Query<(&mut Transform, &mut Visibility), With<NoteMarker>>,
+    mut q_notes: Query<(&mut Transform, &mut Visibility, &mut PooledNote), With<NoteMarker>>,
     _now_stamp: Res<NowStamp>,
 ) {
     let Some(mut status) = status else {
@@ -139,47 +181,83 @@ fn render_visible_chart(
         let y = -VISIBLE_HEIGHT / 2.0
             + ToPrimitive::to_f64(ratio_value).unwrap_or(0.0) as f32 * VISIBLE_HEIGHT;
 
-        // 更新或创建音符实体
-        if let Some(entity) = vis.notes.get(&playhead_event.id()) {
-            if let Ok((mut tf, mut v)) = q_notes.get_mut(*entity) {
+        let event_id = playhead_event.id();
+
+        // 检查音符是否已经在活跃列表中
+        if let Some(&entity) = pool.active.get(&event_id) {
+            // 更新现有音符的位置和可见性
+            if let Ok((mut tf, mut v, mut note)) = q_notes.get_mut(entity) {
                 tf.translation.x = x;
                 tf.translation.y = y;
                 *v = Visibility::Visible;
+                note.state = NoteState::Active;
             }
-        } else {
-            let entity = commands
-                .spawn((
-                    Sprite {
-                        color: Color::srgb(0.3, 0.7, 1.0),
-                        custom_size: Some(Vec2::new(LANE_WIDTH - 4.0, NOTE_HEIGHT)),
-                        ..Default::default()
-                    },
-                    Transform::from_xyz(x, y, 2.0),
-                    GlobalTransform::default(),
-                    Visibility::default(),
-                    InheritedVisibility::default(),
-                    NoteMarker,
-                ))
-                .id();
-            vis.notes.insert(playhead_event.id(), entity);
+            alive.push(event_id);
+            continue;
         }
 
-        alive.push(playhead_event.id());
+        // 从对象池中获取一个可用实体
+        if let Some(&entity) = pool.available.last() {
+            pool.available.pop();
+
+            // 更新实体组件
+            if let Ok((mut tf, mut v, mut note)) = q_notes.get_mut(entity) {
+                tf.translation.x = x;
+                tf.translation.y = y;
+                *v = Visibility::Visible;
+                note.state = NoteState::Active;
+                note.event_id = Some(event_id);
+            }
+
+            // 加入活跃列表
+            pool.active.insert(event_id, entity);
+            pool.entity_to_event.insert(entity, event_id);
+            vis.notes.insert(event_id, entity);
+            alive.push(event_id);
+        }
     }
 
-    // 隐藏过时音符
-    let obsolete: Vec<ChartEventId> = vis
-        .notes
+    // 回收过时音符到对象池
+    let obsolete: Vec<ChartEventId> = pool
+        .active
         .keys()
         .filter(|id| !alive.contains(id))
         .cloned()
         .collect();
 
-    for id in obsolete {
-        if let Some(&entity) = vis.notes.get(&id)
-            && let Ok((_, mut v)) = q_notes.get_mut(entity)
-        {
-            *v = Visibility::Hidden;
+    for event_id in obsolete {
+        if let Some(&entity) = pool.active.get(&event_id) {
+            // 隐藏音符
+            if let Ok((_, mut v, mut note)) = q_notes.get_mut(entity) {
+                *v = Visibility::Hidden;
+                note.state = NoteState::Hidden;
+                note.event_id = None;
+            }
+
+            // 从活跃列表移除，加入可用池
+            pool.available.push(entity);
+            pool.active.remove(&event_id);
+            pool.entity_to_event.remove(&entity);
+            vis.notes.remove(&event_id);
         }
+    }
+}
+
+/// 打印对象池统计信息
+fn print_pool_stats(pool: Res<NotePoolState>, time: Res<Time>, mut timer: Local<f32>) {
+    // 每5秒打印一次统计信息
+    *timer += time.delta_secs();
+    if *timer >= 5.0 {
+        *timer = 0.0;
+
+        let usage =
+            (POOL_INITIAL_SIZE - pool.available.len()) as f32 / POOL_INITIAL_SIZE as f32 * 100.0;
+
+        println!(
+            "📊 对象池状态 | 活跃: {} | 可用: {} | 使用率: {:.1}%",
+            pool.active.len(),
+            pool.available.len(),
+            usage
+        );
     }
 }

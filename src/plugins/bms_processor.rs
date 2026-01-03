@@ -2,7 +2,10 @@
 //!
 //! 负责BMS文件的异步加载、解析和处理
 
-use std::{path::Path, path::PathBuf, time::Duration};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use anyhow::Result;
 use async_fs as afs;
@@ -20,6 +23,22 @@ use gametime::TimeSpan;
 use crate::filesystem;
 use crate::plugins::audio_manager::AudioPlayMessage;
 use crate::resources::{ExecArgs, NowStamp};
+
+/// 系统集合
+#[derive(SystemSet, Debug, Clone, Copy, Eq, PartialEq, Hash)]
+pub enum BmsSystemSet {
+    /// 加载BMS文件
+    BmsLoad,
+    /// 处理BMS事件
+    EventProcess,
+}
+
+/// 音频系统集合
+#[derive(SystemSet, Debug, Clone, Copy, Eq, PartialEq, Hash)]
+pub enum AudioSystemSet {
+    /// 音频播放
+    AudioPlay,
+}
 
 /// BGM通道标记
 #[derive(Resource)]
@@ -42,6 +61,8 @@ pub struct BmsProcessorResource {
     pub audio_paths: HashMap<WavId, PathBuf>,
     /// 音频资源句柄
     pub audio_handles: HashMap<WavId, Handle<KiraAudioSource>>,
+    /// 待加载的音频ID列表
+    pending_audio_loads: Vec<WavId>,
     /// 是否已开始播放
     pub started: bool,
     /// 是否已警告缺失音频
@@ -53,9 +74,17 @@ pub struct BMSProcessorPlugin;
 
 impl Plugin for BMSProcessorPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, load_bms_file)
-            .add_systems(Update, poll_bms_load_task)
-            .add_systems(Update, process_chart_events);
+        app.add_systems(Startup, load_bms_file.in_set(BmsSystemSet::BmsLoad))
+            .add_systems(
+                Update,
+                (
+                    poll_bms_load_task,
+                    batch_load_audio_assets,
+                    process_chart_events,
+                )
+                    .chain()
+                    .in_set(BmsSystemSet::EventProcess),
+            );
     }
 }
 
@@ -133,7 +162,7 @@ async fn load_bms_and_collect_paths(
 /// 轮询BMS加载任务状态
 fn poll_bms_load_task(
     mut commands: Commands,
-    asset_server: Res<AssetServer>,
+    _asset_server: Res<AssetServer>,
     task_res: Option<ResMut<BmsLoadTask>>,
 ) {
     let Some(mut task) = task_res else {
@@ -143,23 +172,15 @@ fn poll_bms_load_task(
     if let Some(result) = check_ready(&mut task.0) {
         match result {
             Ok((processor, audio_paths)) => {
-                // 加载音频资源
-                let mut audio_handles = HashMap::new();
+                // 收集所有音频ID,稍后分批加载
+                let all_audio_ids: Vec<_> = audio_paths.keys().copied().collect();
 
-                // 由于Bevy Asset API的'static生命周期要求,需要构建完整路径字符串
-                for (id, chosen) in audio_paths.iter() {
-                    let path_str = chosen.to_string_lossy().to_string();
-                    let asset_str = format!("fs://{}", path_str);
-                    let ap = AssetPath::parse(&asset_str);
-                    let handle: Handle<KiraAudioSource> = asset_server.load_override(ap);
-                    audio_handles.insert(*id, handle);
-                }
-
-                // 创建处理器资源
+                // 创建处理器资源（音频句柄为空,稍后分批加载）
                 commands.insert_resource(BmsProcessorResource {
                     processor,
-                    audio_handles,
+                    audio_handles: HashMap::new(),
                     audio_paths,
+                    pending_audio_loads: all_audio_ids,
                     started: false,
                     warned_missing: false,
                 });
@@ -204,6 +225,33 @@ fn process_chart_events(
                 wav_id: *wav,
                 is_bgm,
             });
+        }
+    }
+}
+
+/// 分批加载音频资源
+fn batch_load_audio_assets(
+    status: Option<ResMut<BmsProcessorResource>>,
+    asset_server: Res<AssetServer>,
+) {
+    let Some(mut status) = status else {
+        return;
+    };
+
+    // 每帧加载最多10个音频文件
+    const BATCH_SIZE: usize = 10;
+    let mut loaded_count = 0;
+
+    // 从待加载列表中取出音频ID
+    while !status.pending_audio_loads.is_empty() && loaded_count < BATCH_SIZE {
+        let id = status.pending_audio_loads.remove(0);
+        if let Some(path) = status.audio_paths.get(&id) {
+            let path_str = path.to_string_lossy().to_string();
+            let asset_str = format!("fs://{}", path_str);
+            let ap = AssetPath::parse(&asset_str);
+            let handle: Handle<KiraAudioSource> = asset_server.load_override(ap);
+            status.audio_handles.insert(id, handle);
+            loaded_count += 1;
         }
     }
 }
