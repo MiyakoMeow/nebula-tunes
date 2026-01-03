@@ -19,16 +19,28 @@ use bevy::{
         AssetPath, AssetPlugin, UnapprovedPathMode,
         io::{AssetSourceBuilder, AssetSourceId},
     },
-    audio::{AudioPlayer, AudioSource, PlaybackSettings},
     platform::collections::HashMap,
     prelude::*,
     tasks::{IoTaskPool, Task, futures::check_ready},
 };
+use bevy_kira_audio::AudioApp;
+use bevy_kira_audio::AudioChannel;
+use bevy_kira_audio::AudioControl;
+use bevy_kira_audio::AudioPlugin;
+use bevy_kira_audio::AudioSource as KiraAudioSource;
 use bms_rs::{bms::prelude::*, chart_process::prelude::*};
 use chardetng::EncodingDetector;
 use clap::Parser;
 use gametime::{TimeSpan, TimeStamp};
 use num_traits::ToPrimitive;
+
+/// BGM通道标记
+#[derive(Resource)]
+struct BgmChannel;
+
+/// 音效通道标记
+#[derive(Resource)]
+struct SfxChannel;
 
 fn main() {
     let args = ExecArgs::parse();
@@ -40,6 +52,9 @@ fn main() {
             unapproved_path_mode: UnapprovedPathMode::Deny,
             ..Default::default()
         }))
+        .add_plugins(AudioPlugin)
+        .add_audio_channel::<BgmChannel>()
+        .add_audio_channel::<SfxChannel>()
         .add_systems(Startup, setup_scene_7k)
         .add_systems(Startup, load_bms_file)
         .add_systems(
@@ -113,7 +128,7 @@ async fn load_bms_and_collect_paths(
 #[derive(Resource)]
 struct BmsProcessStatus {
     processor: BmsProcessor,
-    audio_handles: HashMap<WavId, Handle<AudioSource>>,
+    audio_handles: HashMap<WavId, Handle<KiraAudioSource>>,
     audio_paths: HashMap<WavId, PathBuf>,
     started: bool,
     warned_missing: bool,
@@ -214,7 +229,7 @@ fn poll_bms_load_task(
                 let mut audio_handles = HashMap::new();
                 for (id, chosen) in &audio_paths {
                     let ap = AssetPath::from_path(chosen).with_source(AssetSourceId::from("fs"));
-                    let handle: Handle<AudioSource> = asset_server.load_override(ap);
+                    let handle: Handle<KiraAudioSource> = asset_server.load_override(ap);
                     audio_handles.insert(*id, handle);
                 }
                 commands.insert_resource(BmsProcessStatus {
@@ -239,7 +254,7 @@ fn update_now_stamp(mut now_stamp: ResMut<NowStamp>) {
 
 fn start_when_audio_ready(
     status: Option<ResMut<BmsProcessStatus>>,
-    assets: Res<Assets<AudioSource>>,
+    assets: Res<Assets<KiraAudioSource>>,
     now_stamp: Res<NowStamp>,
 ) {
     let Some(mut status) = status else {
@@ -271,9 +286,10 @@ fn start_when_audio_ready(
 }
 
 fn process_chart_events(
-    mut commands: Commands,
     status: Option<ResMut<BmsProcessStatus>>,
-    assets: Res<Assets<AudioSource>>,
+    assets: Res<Assets<KiraAudioSource>>,
+    bgm_channel: Res<AudioChannel<BgmChannel>>,
+    sfx_channel: Res<AudioChannel<SfxChannel>>,
     now_stamp: Res<NowStamp>,
 ) {
     let Some(mut status) = status else {
@@ -283,25 +299,28 @@ fn process_chart_events(
         return;
     }
     let handles = status.audio_handles.clone();
-    let mut to_spawn: Vec<(AudioPlayer, PlaybackSettings)> = Vec::new();
+
     for evp in status.processor.update(now_stamp.0) {
-        let wav = match evp.event() {
+        let (wav, is_bgm) = match evp.event() {
+            ChartEvent::Bgm { wav_id: Some(wav) } => (wav, true),
             ChartEvent::Note {
                 wav_id: Some(wav), ..
-            }
-            | ChartEvent::Bgm { wav_id: Some(wav) } => wav,
+            } => (wav, false),
             _ => continue,
         };
+
         let Some(handle) = handles.get(wav) else {
             continue;
         };
         if assets.get(handle).is_none() {
             continue;
         }
-        to_spawn.push((AudioPlayer::new(handle.clone()), PlaybackSettings::DESPAWN));
-    }
-    if !to_spawn.is_empty() {
-        commands.spawn_batch(to_spawn);
+
+        if is_bgm {
+            bgm_channel.play(handle.clone());
+        } else {
+            sfx_channel.play(handle.clone());
+        }
     }
 }
 

@@ -24,7 +24,6 @@ features = [
     "async_executor",
     "bevy_anti_alias",
     "bevy_asset",
-    "bevy_audio",
     "bevy_camera",
     "bevy_color",
     "bevy_core_pipeline",
@@ -56,10 +55,8 @@ features = [
     "custom_cursor",
     "debug",
     "default_font",
-    "flac",
     "hdr",
     "ktx2",
-    "mp3",
     "multi_threaded",
     "png",
     "reflect_auto_register",
@@ -67,8 +64,6 @@ features = [
     "std",
     "sysinfo_plugin",
     "tonemapping_luts",
-    "vorbis",
-    "wav",
     "wayland",
     "webgl2",
     "x11",
@@ -77,6 +72,9 @@ features = [
 
 [dependencies.bms-rs]
 git = "https://github.com/MikuroXina/bms-rs"
+
+[dependencies.bevy_kira_audio]
+version = "0.24"
 
 # Platform-specific winit configuration
 [target.'cfg(target_os = "linux")'.dependencies.winit]
