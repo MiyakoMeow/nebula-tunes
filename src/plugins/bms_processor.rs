@@ -20,8 +20,9 @@ use bms_rs::{bms::prelude::*, chart_process::prelude::*};
 use chardetng::EncodingDetector;
 use gametime::TimeSpan;
 
+use crate::schedule::LogicSchedule;
+
 use crate::filesystem;
-use crate::plugins::audio_manager::AudioPlayMessage;
 use crate::resources::{ExecArgs, NowStamp};
 
 /// 系统集合
@@ -76,11 +77,11 @@ impl Plugin for BMSProcessorPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, load_bms_file.in_set(BmsSystemSet::BmsLoad))
             .add_systems(
-                Update,
+                LogicSchedule,
                 (
                     poll_bms_load_task,
                     batch_load_audio_assets,
-                    process_chart_events,
+                    update_processor_state,
                 )
                     .chain()
                     .in_set(BmsSystemSet::EventProcess),
@@ -196,10 +197,10 @@ fn poll_bms_load_task(
     }
 }
 
-/// 处理图表事件并发送音频播放消息
-fn process_chart_events(
+/// 更新处理器状态并发送触发消息
+fn update_processor_state(
     status: Option<ResMut<BmsProcessorResource>>,
-    mut audio_messages: MessageWriter<AudioPlayMessage>,
+    mut triggered_events: MessageWriter<crate::plugins::audio_trigger::TriggeredNoteEvent>,
     now_stamp: Res<NowStamp>,
 ) {
     let Some(mut status) = status else {
@@ -212,7 +213,7 @@ fn process_chart_events(
     // 先收集音频句柄
     let audio_ids: Vec<_> = status.audio_handles.keys().copied().collect();
 
-    // 更新处理器并发送音频消息
+    // 更新处理器并发送触发事件
     for evp in status.processor.update(now_stamp.0) {
         let (wav, is_bgm) = match evp.event() {
             ChartEvent::Bgm { wav_id: Some(wav) } => (wav, true),
@@ -224,7 +225,8 @@ fn process_chart_events(
 
         // 检查音频是否存在
         if audio_ids.contains(wav) {
-            audio_messages.write(AudioPlayMessage {
+            // 发送触发消息（而不是音频播放消息）
+            triggered_events.write(crate::plugins::audio_trigger::TriggeredNoteEvent {
                 wav_id: *wav,
                 is_bgm,
             });

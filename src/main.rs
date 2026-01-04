@@ -14,16 +14,23 @@ mod components;
 mod filesystem;
 mod plugins;
 mod resources;
+mod schedule;
 
 use bevy::{
+    app::MainScheduleOrder,
     asset::{AssetPlugin, UnapprovedPathMode, io::AssetSourceBuilder},
+    ecs::schedule::{ExecutorKind, Schedule},
     prelude::*,
 };
 use bevy_kira_audio::AudioPlugin;
 use clap::Parser;
 
-use plugins::{AudioManagerPlugin, BMSProcessorPlugin, NoteRendererPlugin, TimeSystemPlugin};
+use plugins::{
+    AudioManagerPlugin, AudioTriggerPlugin, BMSProcessorPlugin, NoteRendererPlugin,
+    TimeSystemPlugin,
+};
 use resources::ExecArgs;
+use schedule::{AudioSchedule, LogicSchedule};
 
 fn main() {
     let args = ExecArgs::parse();
@@ -35,10 +42,34 @@ fn main() {
             unapproved_path_mode: UnapprovedPathMode::Deny,
             ..Default::default()
         }))
-        .add_plugins(AudioPlugin)
-        .add_plugins(TimeSystemPlugin)
+        .add_plugins(AudioPlugin);
+
+    // 配置自定义 Schedule
+    configure_schedules(&mut app);
+
+    app.add_plugins(TimeSystemPlugin)
         .add_plugins(BMSProcessorPlugin)
+        .add_plugins(AudioTriggerPlugin)
         .add_plugins(AudioManagerPlugin)
         .add_plugins(NoteRendererPlugin)
         .run();
+}
+
+/// 配置自定义 Schedule 和执行顺序
+fn configure_schedules(app: &mut App) {
+    // 创建并添加 Schedule（单线程执行）
+    let mut logic_schedule = Schedule::new(LogicSchedule);
+    logic_schedule.set_executor_kind(ExecutorKind::SingleThreaded);
+    app.add_schedule(logic_schedule);
+
+    let mut audio_schedule = Schedule::new(AudioSchedule);
+    audio_schedule.set_executor_kind(ExecutorKind::SingleThreaded);
+    app.add_schedule(audio_schedule);
+
+    // 配置执行顺序
+    let mut main_order = app.world_mut().resource_mut::<MainScheduleOrder>();
+    main_order.insert_after(bevy::app::First, LogicSchedule);
+    main_order.insert_after(LogicSchedule, AudioSchedule);
+    main_order.insert_after(AudioSchedule, bevy::app::Update);
+    // 渲染在 Update 中运行，会自动跟随在 Update 之后
 }
