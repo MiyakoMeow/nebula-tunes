@@ -74,7 +74,7 @@ features = [
 git = "https://github.com/MikuroXina/bms-rs"
 
 [dependencies.bevy_kira_audio]
-version = "0.24"
+version = "0.25"
 
 # Platform-specific winit configuration
 [target.'cfg(target_os = "linux")'.dependencies.winit]
