@@ -15,7 +15,7 @@ gametime = { version = "0.7.2", features = ["global_reference"] }
 num-traits = "0.2.19"
 
 [dependencies.bevy]
-version = "0.17"
+version = "0.18"
 default-features = false
 features = [
     "android-game-activity",
